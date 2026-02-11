@@ -1,0 +1,71 @@
+name: Deploy to TESTSERVER
+on:
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '20.x'
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build NestJS app
+        run: npm run build:shop && npm run build:delivery && npm run build:admin && npm run build:bakery
+
+      - name: Create deployment archive
+        run: |
+          tar -czf deploy.tar.gz \
+            --exclude='node_modules/.cache' \
+            --exclude='*.log' \
+            dist/ \
+            node_modules/ \
+            package.json \
+            package-lock.json
+      - name: Test SSH Connection
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 30s
+          script: |
+            echo "SSH connection successful!"
+            whoami
+            pwd
+      - name: Deploy archive to Server
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          port: 22
+          key: ${{ secrets.SSH_KEY }}
+          source: 'deploy.tar.gz'
+          target: '/tmp/'
+
+      - name: Extract and restart PM2
+        uses: appleboy/ssh-action@v0.1.5
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          port: 22
+          key: ${{ secrets.SSH_KEY}}
+          script: |
+            cd /var/www/apps/bbservice
+            tar -xzf /tmp/deploy.tar.gz
+            rm /tmp/deploy.tar.gz
+            pm2 restart shop || pm2 start dist/apps/shop-api/main.js --name shop
+            pm2 restart delivery || pm2 start dist/apps/delivery-api/main.js --name delivery
+            pm2 restart admin || pm2 start dist/apps/admin-api/main.js --name admin
+            pm2 restart bakery || pm2 start dist/apps/bakery-api/main.js --name bakery
+            pm2 save
+            pm2 startup systemd -u root --hp /root || true

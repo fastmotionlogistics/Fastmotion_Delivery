@@ -1,0 +1,18 @@
+export function generateRandomString(length = 32): string {
+  const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let randomString = '';
+
+  for (let i = 0; i < length; i++) {
+    const randomIndex = Math.floor(Math.random() * charset.length);
+    randomString += charset.charAt(randomIndex);
+  }
+
+  return randomString;
+}
+
+export function snakeToTitleCase(str: string) {
+  return str
+    .toLowerCase()
+    .replace(/(^|_)([a-z])/g, (match, p1, p2) => (p1 ? ' ' : '') + p2.toUpperCase())
+    .replace(/^./, (str) => str.toUpperCase());
+}

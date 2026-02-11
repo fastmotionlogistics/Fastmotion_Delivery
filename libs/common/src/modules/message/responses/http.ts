@@ -1,0 +1,37 @@
+export default {
+  SUCCESS: {
+    OK: 'OK',
+    CREATED: 'Created',
+    ACCEPTED: 'Accepted',
+    NO_CONTENT: 'No Content',
+  },
+  REDIRECTION: {
+    MOVED_PERMANENTLY: 'Move Permanently',
+    FOUND: 'Found',
+    NOT_MODIFIED: 'Not Modified',
+    TEMPORARY_REDIRECT: 'Temporary Redirect',
+    PERMANENT_REDIRECT: 'Permanent Redirect',
+  },
+  CLIENT_ERROR: {
+    BAD_REQUEST: 'Bad Request',
+    UNAUTHORIZED: 'Unauthorized',
+    FORBIDDEN: 'Forbidden',
+    NOT_FOUND: 'Not Found',
+    METHOD_NOT_ALLOWED: 'Not Found',
+    NOT_ACCEPTABLE: 'Not Found',
+    REQUEST_TIME_OUT: 'Not Found',
+    PAYLOAD_TOO_LARGE: 'Payload To Large',
+    URI_TOO_LARGE: 'Uri To Large',
+    UNSUPPORTED_MEDIA_TYPE: 'Not Found',
+    TOO_MANY_REQUEST: 'Too Many Request',
+    REQUEST_HEADER_FIELDS_TOO_LARGE: 'Request Header Fields Too Large',
+    UNAVAILABLE_FOR_LEGAL_REASONS: 'Unavailable For Legal Reasons',
+  },
+  SERVER_ERROR: {
+    INTERNAL_SERVER_ERROR: 'Internal Server Error',
+    NOT_IMPLEMENTED: 'Not Implemented',
+    BAD_GATEWAY: 'Bad Gateway',
+    serviceUnavailable: 'Service Unavailable',
+    GATEWAY_TIMEOUT: 'Gateway Timeout',
+  },
+};

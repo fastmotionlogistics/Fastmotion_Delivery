@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7-alpine
+    container_name: bread-delivery-mongo
+    ports:
+      - '27017:27017'
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: bread-delivery
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - bread-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: bread-delivery-redis
+    ports:
+      - '6379:6379'
+    networks:
+      - bread-network
+
+  shop-api:
+    build:
+      context: .
+      dockerfile: apps/shop-api/Dockerfile
+    container_name: bread-shop-api
+    ports:
+      - '3001:3001'
+    environment:
+      - PORT=3001
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/bread-delivery
+      - NODE_ENV=production
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - bread-network
+
+  bakery-api:
+    build:
+      context: .
+      dockerfile: apps/bakery-api/Dockerfile
+    container_name: bread-bakery-api
+    ports:
+      - '3002:3002'
+    environment:
+      - PORT=3002
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/bread-delivery
+      - NODE_ENV=production
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - bread-network
+
+  delivery-api:
+    build:
+      context: .
+      dockerfile: apps/delivery-api/Dockerfile
+    container_name: bread-delivery-api
+    ports:
+      - '3003:3003'
+    environment:
+      - PORT=3003
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/bread-delivery
+      - NODE_ENV=production
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - bread-network
+
+  admin-api:
+    build:
+      context: .
+      dockerfile: apps/admin-api/Dockerfile
+    container_name: bread-admin-api
+    ports:
+      - '3004:3004'
+    environment:
+      - PORT=3004
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/bread-delivery
+      - NODE_ENV=production
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - bread-network
+
+  core-service:
+    build:
+      context: .
+      dockerfile: apps/core-service/Dockerfile
+    container_name: bread-core-service
+    ports:
+      - '3005:3005'
+    environment:
+      - PORT=3005
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/bread-delivery
+      - NODE_ENV=production
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - bread-network
+
+volumes:
+  mongodb_data:
+
+networks:
+  bread-network:
+    driver: bridge
