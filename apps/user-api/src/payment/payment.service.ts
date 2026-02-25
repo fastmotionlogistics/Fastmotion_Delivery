@@ -278,15 +278,33 @@ export class PaymentService {
         const verifiedStatus = verification.responseBody?.paymentStatus;
 
         if (this.monnifyService.isPaymentSuccessful(verifiedStatus)) {
-          // Process the payment (generates PINs, updates delivery)
+          // Process the payment (generates PINs for delivery, or credits wallet)
           await this.handleWebhookPaymentSuccess(reference, {
             providerReference: payment.providerReference,
             providerResponse: JSON.stringify(verification.responseBody),
             amount: verification.responseBody.amountPaid,
           });
 
-          // Reload payment + fetch delivery with PINs
           const updatedPayment = await this.paymentRepository.findPaymentByReference(reference);
+
+          // Wallet funding — no delivery to look up
+          const isWalletFunding = !payment.deliveryRequest && payment.description === 'Wallet funding';
+          if (isWalletFunding) {
+            const wallet = await this.paymentRepository.getOrCreateWallet(
+              payment.user as Types.ObjectId,
+            );
+            return {
+              success: true,
+              message: 'Wallet funded successfully',
+              data: {
+                status: DeliveryPaymentStatusEnum.PAID,
+                paidAt: updatedPayment?.paidAt,
+                walletBalance: wallet.depositBalance,
+              },
+            };
+          }
+
+          // Delivery payment — fetch delivery with PINs
           let deliveryData: any = {};
           if (payment.deliveryRequest) {
             const delivery = await this.paymentRepository.deliveryModel
