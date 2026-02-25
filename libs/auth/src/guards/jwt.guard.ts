@@ -21,23 +21,24 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
   }
 
   override handleRequest(err: any, user: any, info: any, context: ExecutionContext) {
-    // console.log(user, '===user===');
     if (err || !user) {
       throw err || new UnauthorizedException();
     }
+
     const requiredRoles = this.reflector.get<Role[]>('roles', context.getHandler());
+
+    // No roles required — just return the authenticated user
     if (!requiredRoles) {
-      return true; // No roles required, allow access
+      return user;
     }
 
     if (requiredRoles.some((role) => user.type === role)) {
-      if (user.isDeleted) throw new UnauthorizedException('Account Has Been Deleted, Beg Us!!!');
+      if (user.isDeleted) throw new UnauthorizedException('Account Has Been Deleted');
       if (!user.isActive)
-        throw new UnauthorizedException('Account Has Been DeActivated, Contact Support For Assistance');
+        throw new UnauthorizedException('Account Has Been Deactivated, Contact Support For Assistance');
       return user;
     } else {
-      throw new UnauthorizedException('Not Your Specs');
+      throw new UnauthorizedException('Insufficient role permissions');
     }
-    // return user;
   }
 }

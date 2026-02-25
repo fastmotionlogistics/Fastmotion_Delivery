@@ -53,16 +53,49 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Get all delivery requests for the current user' })
   @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'deliveryType', required: false })
+  @ApiQuery({ name: 'search', required: false, description: 'Search by tracking number' })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'Filter from date (ISO string)' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'Filter to date (ISO string)' })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @Get()
   async getMyDeliveries(
     @CurrentUser() user: User,
     @Query('status') status?: string,
+    @Query('deliveryType') deliveryType?: string,
+    @Query('search') search?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return await this.deliveryService.getMyDeliveries(user, { status, page, limit });
+    return await this.deliveryService.getMyDeliveries(user, {
+      status, deliveryType, search, dateFrom, dateTo, page, limit,
+    });
+  }
+
+  // ============ Catalog (Categories & Handling) ============
+
+  @ApiOperation({ summary: 'Get active item categories for parcel selection' })
+  @Get('catalog/categories')
+  async getCategories() {
+    return await this.deliveryService.getCategories();
+  }
+
+  @ApiOperation({ summary: 'Get active special handling options' })
+  @Get('catalog/handling')
+  async getHandling() {
+    return await this.deliveryService.getHandling();
+  }
+
+  @ApiOperation({ summary: 'Track delivery by tracking number (e.g. FM-KJHS-3H)' })
+  @Get('track/:trackingNumber')
+  async trackByTrackingNumber(
+    @CurrentUser() user: User,
+    @Param('trackingNumber') trackingNumber: string,
+  ) {
+    return await this.deliveryService.trackByTrackingNumber(user, trackingNumber);
   }
 
   @ApiOperation({ summary: 'Get delivery request by ID' })
@@ -226,4 +259,5 @@ export class DeliveryController {
   async getActiveDelivery(@CurrentUser() user: User) {
     return await this.deliveryService.getActiveDelivery(user);
   }
+
 }

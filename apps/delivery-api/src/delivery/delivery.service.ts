@@ -1,26 +1,11 @@
-import {
-  Injectable,
-  BadRequestException,
-  NotFoundException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import {
-  DeliveryRequest,
-  DeliveryRequestDocument,
-  Rider,
-  RiderDocument,
-  User,
-  UserDocument,
-} from '@libs/database';
-import {
-  DeliveryStatusEnum,
-  DeliveryTypeEnum,
-  DeliveryPaymentStatusEnum,
-  RiderStatusEnum,
-} from '@libs/common';
+import { DeliveryRequest, DeliveryRequestDocument, Rider, RiderDocument, User, UserDocument } from '@libs/database';
+import { DeliveryStatusEnum, DeliveryTypeEnum, DeliveryPaymentStatusEnum, RiderStatusEnum } from '@libs/common';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
+import { NotificationService } from '@libs/common/modules/notification';
+import { NotificationRecipientType } from '@libs/database';
 import {
   AcceptDeliveryDto,
   RejectDeliveryDto,
@@ -35,7 +20,10 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   [DeliveryStatusEnum.RIDER_ACCEPTED]: [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP],
   [DeliveryStatusEnum.RIDER_ASSIGNED]: [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP],
   [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP]: [DeliveryStatusEnum.RIDER_ARRIVED_PICKUP],
-  [DeliveryStatusEnum.RIDER_ARRIVED_PICKUP]: [DeliveryStatusEnum.AWAITING_PAYMENT, DeliveryStatusEnum.PICKUP_IN_PROGRESS],
+  [DeliveryStatusEnum.RIDER_ARRIVED_PICKUP]: [
+    DeliveryStatusEnum.AWAITING_PAYMENT,
+    DeliveryStatusEnum.PICKUP_IN_PROGRESS,
+  ],
   [DeliveryStatusEnum.PAYMENT_CONFIRMED]: [DeliveryStatusEnum.PICKUP_IN_PROGRESS],
   [DeliveryStatusEnum.PICKUP_IN_PROGRESS]: [DeliveryStatusEnum.PICKED_UP],
   [DeliveryStatusEnum.PICKED_UP]: [DeliveryStatusEnum.IN_TRANSIT],
@@ -72,16 +60,31 @@ export class DeliveryService {
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
     private readonly gateway: DeliveryGateway,
+    private readonly notificationService: NotificationService,
   ) {}
+
+  // Helper: push notify customer
+  private async pushNotifyCustomer(customerId: any, title: string, body: string, data?: Record<string, any>) {
+    try {
+      const user = await this.userModel.findById(customerId).select('deviceToken').lean();
+      if (user && (user as any).deviceToken) {
+        await this.notificationService.send({
+          recipientId: customerId,
+          recipientType: NotificationRecipientType.USER,
+          title,
+          body,
+          token: (user as any).deviceToken,
+          data,
+        });
+      }
+    } catch (_) {}
+  }
 
   // ═══════════════════════════════════════════════
   //  AVAILABLE DELIVERIES
   // ═══════════════════════════════════════════════
 
-  async getAvailableDeliveries(
-    rider: Rider,
-    filters: { latitude?: string; longitude?: string; radius?: number },
-  ) {
+  async getAvailableDeliveries(rider: Rider, filters: { latitude?: string; longitude?: string; radius?: number }) {
     // Rider must be verified and online
     if (rider.verificationStatus !== 'verified') {
       throw new ForbiddenException('Account must be verified to view deliveries');
@@ -175,11 +178,7 @@ export class DeliveryService {
     const query = {
       rider: rider._id,
       status: {
-        $in: [
-          DeliveryStatusEnum.DELIVERED,
-          DeliveryStatusEnum.COMPLETED,
-          DeliveryStatusEnum.CANCELLED,
-        ],
+        $in: [DeliveryStatusEnum.DELIVERED, DeliveryStatusEnum.COMPLETED, DeliveryStatusEnum.CANCELLED],
       },
     };
 
@@ -224,10 +223,9 @@ export class DeliveryService {
 
     // Rider can only view if they are assigned or it's still available
     const isAssigned = delivery.rider?.toString() === rider._id.toString();
-    const isAvailable = [
-      DeliveryStatusEnum.SEARCHING_RIDER,
-      DeliveryStatusEnum.PENDING,
-    ].includes(delivery.status as DeliveryStatusEnum);
+    const isAvailable = [DeliveryStatusEnum.SEARCHING_RIDER, DeliveryStatusEnum.PENDING].includes(
+      delivery.status as DeliveryStatusEnum,
+    );
 
     if (!isAssigned && !isAvailable) {
       throw new ForbiddenException('You do not have access to this delivery');
@@ -263,10 +261,7 @@ export class DeliveryService {
     }
 
     // Only accept deliveries that are searching for riders
-    if (
-      delivery.status !== DeliveryStatusEnum.SEARCHING_RIDER &&
-      delivery.status !== DeliveryStatusEnum.PENDING
-    ) {
+    if (delivery.status !== DeliveryStatusEnum.SEARCHING_RIDER && delivery.status !== DeliveryStatusEnum.PENDING) {
       throw new BadRequestException('This delivery is no longer available');
     }
 
@@ -299,6 +294,7 @@ export class DeliveryService {
       riderRating: rider.averageRating,
       vehicleType: rider.vehicleType,
       vehiclePlateNumber: rider.vehiclePlateNumber,
+      paymentStatus: delivery.paymentStatus,
     });
     this.gateway.emitSystemChatMessage(
       deliveryId,
@@ -312,6 +308,14 @@ export class DeliveryService {
         longitude: parseFloat(rider.currentLongitude),
       });
     }
+
+    // Push notification to customer
+    await this.pushNotifyCustomer(
+      delivery.customer,
+      'Rider Accepted! 🏍️',
+      `${rider.firstName} has accepted your delivery and is heading to the pickup location.`,
+      { type: 'rider_accepted', deliveryId: deliveryId, trackingNumber: delivery.trackingNumber },
+    );
 
     return {
       success: true,
@@ -329,10 +333,7 @@ export class DeliveryService {
           totalPrice: delivery.pricing.totalPrice,
           currency: delivery.pricing.currency,
         },
-        customer: await this.userModel
-          .findById(delivery.customer)
-          .select('firstName lastName phone')
-          .lean(),
+        customer: await this.userModel.findById(delivery.customer).select('firstName lastName phone').lean(),
       },
     };
   }
@@ -356,16 +357,10 @@ export class DeliveryService {
       await delivery.save();
 
       // Decrease rider count
-      await this.riderModel.updateOne(
-        { _id: rider._id },
-        { $inc: { currentDeliveryCount: -1 } },
-      );
+      await this.riderModel.updateOne({ _id: rider._id }, { $inc: { currentDeliveryCount: -1 } });
 
       // WS: notify customer that rider is no longer assigned
-      this.gateway.emitDeliveryStatusUpdate(
-        delivery._id.toString(),
-        DeliveryStatusEnum.SEARCHING_RIDER,
-      );
+      this.gateway.emitDeliveryStatusUpdate(delivery._id.toString(), DeliveryStatusEnum.SEARCHING_RIDER);
       this.gateway.emitSystemChatMessage(
         delivery._id.toString(),
         'Rider is no longer available. Searching for a new rider...',
@@ -457,10 +452,7 @@ export class DeliveryService {
     }
 
     // On delivered/completed, update rider stats
-    if (
-      newStatus === DeliveryStatusEnum.DELIVERED ||
-      newStatus === DeliveryStatusEnum.COMPLETED
-    ) {
+    if (newStatus === DeliveryStatusEnum.DELIVERED || newStatus === DeliveryStatusEnum.COMPLETED) {
       await this.riderModel.updateOne(
         { _id: rider._id },
         {
@@ -492,10 +484,7 @@ export class DeliveryService {
 
       if (activeCount <= 1) {
         // <= 1 because this delivery is still counted
-        await this.riderModel.updateOne(
-          { _id: rider._id },
-          { $set: { status: RiderStatusEnum.AVAILABLE } },
-        );
+        await this.riderModel.updateOne({ _id: rider._id }, { $set: { status: RiderStatusEnum.AVAILABLE } });
       }
     }
 
@@ -515,10 +504,7 @@ export class DeliveryService {
   // ═══════════════════════════════════════════════
 
   async verifyPickupPin(rider: Rider, id: string, body: VerifyPickupPinDto) {
-    const delivery = await this.deliveryModel
-      .findById(id)
-      .select('+pickupPin')
-      .lean();
+    const delivery = await this.deliveryModel.findById(id).select('+pickupPin').lean();
 
     if (!delivery) {
       throw new NotFoundException('Delivery not found');
@@ -577,10 +563,7 @@ export class DeliveryService {
   // ═══════════════════════════════════════════════
 
   async verifyDeliveryPin(rider: Rider, id: string, body: VerifyDeliveryPinDto) {
-    const delivery = await this.deliveryModel
-      .findById(id)
-      .select('+deliveryPin')
-      .lean();
+    const delivery = await this.deliveryModel.findById(id).select('+deliveryPin').lean();
 
     if (!delivery) {
       throw new NotFoundException('Delivery not found');
@@ -644,17 +627,19 @@ export class DeliveryService {
     });
 
     if (activeCount === 0) {
-      await this.riderModel.updateOne(
-        { _id: rider._id },
-        { $set: { status: RiderStatusEnum.AVAILABLE } },
-      );
+      await this.riderModel.updateOne({ _id: rider._id }, { $set: { status: RiderStatusEnum.AVAILABLE } });
     }
 
     const deliveryId = delivery._id.toString();
     this.gateway.emitDeliveryStatusUpdate(deliveryId, DeliveryStatusEnum.DELIVERED);
-    this.gateway.emitSystemChatMessage(
-      deliveryId,
-      'Delivery PIN verified. Parcel has been delivered successfully! 🎉',
+    this.gateway.emitSystemChatMessage(deliveryId, 'Delivery PIN verified. Parcel has been delivered successfully! 🎉');
+
+    // Push notification to customer
+    await this.pushNotifyCustomer(
+      delivery.customer,
+      'Delivery Complete! ✅',
+      'Your parcel has been delivered successfully. Thank you for using FastMotion!',
+      { type: 'delivery_completed', deliveryId: id },
     );
 
     return {
@@ -702,18 +687,14 @@ export class DeliveryService {
 
     // Calculate ETA to target
     const targetLoc =
-      delivery.status === DeliveryStatusEnum.IN_TRANSIT ||
-      delivery.status === DeliveryStatusEnum.RIDER_ARRIVED_DROPOFF
+      delivery.status === DeliveryStatusEnum.IN_TRANSIT || delivery.status === DeliveryStatusEnum.RIDER_ARRIVED_DROPOFF
         ? 'dropoff'
         : 'pickup';
 
     // We'd need the full delivery to get target coords — simple estimate:
     const fullDelivery = await this.deliveryModel.findById(id).lean();
     if (fullDelivery) {
-      const target =
-        targetLoc === 'dropoff'
-          ? fullDelivery.dropoffLocation
-          : fullDelivery.pickupLocation;
+      const target = targetLoc === 'dropoff' ? fullDelivery.dropoffLocation : fullDelivery.pickupLocation;
 
       const dist = this.calculateDistance(
         parseFloat(body.latitude),
@@ -756,31 +737,47 @@ export class DeliveryService {
     ];
 
     if (!validStatuses.includes(delivery.status as DeliveryStatusEnum)) {
-      throw new BadRequestException(
-        `Cannot mark arrived at pickup from status "${delivery.status}"`,
-      );
+      throw new BadRequestException(`Cannot mark arrived at pickup from status "${delivery.status}"`);
     }
 
     delivery.status = DeliveryStatusEnum.RIDER_ARRIVED_PICKUP as any;
     delivery.arrivedAtPickupAt = new Date();
     delivery.canReschedule = false;
+
+    // For already-paid deliveries (e.g. scheduled), generate PINs now if not yet generated
+    const alreadyPaid = delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID;
+    if (alreadyPaid && !delivery.pickupPin) {
+      delivery.pickupPin = this.generatePin();
+    }
+    if (alreadyPaid && !delivery.deliveryPin) {
+      delivery.deliveryPin = this.generatePin();
+    }
+
     await delivery.save();
 
     const deliveryId = delivery._id.toString();
     const isQuickPayPending =
-      delivery.deliveryType === DeliveryTypeEnum.QUICK &&
-      delivery.paymentStatus !== DeliveryPaymentStatusEnum.PAID;
+      delivery.deliveryType === DeliveryTypeEnum.QUICK && delivery.paymentStatus !== DeliveryPaymentStatusEnum.PAID;
 
-    this.gateway.emitDeliveryStatusUpdate(
-      deliveryId,
-      DeliveryStatusEnum.RIDER_ARRIVED_PICKUP,
-      { paymentRequired: isQuickPayPending },
-    );
+    this.gateway.emitDeliveryStatusUpdate(deliveryId, DeliveryStatusEnum.RIDER_ARRIVED_PICKUP, {
+      paymentRequired: isQuickPayPending,
+      paymentStatus: delivery.paymentStatus,
+    });
     this.gateway.emitSystemChatMessage(
       deliveryId,
       isQuickPayPending
         ? `${rider.firstName} has arrived at the pickup location. Please complete payment to proceed.`
         : `${rider.firstName} has arrived at the pickup location. Please share the pickup PIN.`,
+    );
+
+    // Push notification to customer
+    await this.pushNotifyCustomer(
+      delivery.customer,
+      'Rider at Pickup 📍',
+      isQuickPayPending
+        ? `${rider.firstName} has arrived. Please complete payment to proceed.`
+        : `${rider.firstName} has arrived at the pickup location. Share the pickup PIN.`,
+      { type: 'rider_arrived_pickup', deliveryId: id, paymentRequired: isQuickPayPending },
     );
 
     return {
@@ -808,15 +805,10 @@ export class DeliveryService {
       throw new ForbiddenException('You are not assigned to this delivery');
     }
 
-    const validStatuses = [
-      DeliveryStatusEnum.IN_TRANSIT,
-      DeliveryStatusEnum.PICKED_UP,
-    ];
+    const validStatuses = [DeliveryStatusEnum.IN_TRANSIT, DeliveryStatusEnum.PICKED_UP];
 
     if (!validStatuses.includes(delivery.status as DeliveryStatusEnum)) {
-      throw new BadRequestException(
-        `Cannot mark arrived at dropoff from status "${delivery.status}"`,
-      );
+      throw new BadRequestException(`Cannot mark arrived at dropoff from status "${delivery.status}"`);
     }
 
     delivery.status = DeliveryStatusEnum.RIDER_ARRIVED_DROPOFF as any;
@@ -828,6 +820,14 @@ export class DeliveryService {
     this.gateway.emitSystemChatMessage(
       deliveryId,
       `${rider.firstName} has arrived at the drop-off location. Please share the delivery PIN.`,
+    );
+
+    // Push notification to customer
+    await this.pushNotifyCustomer(
+      delivery.customer,
+      'Rider at Drop-off 📦',
+      `${rider.firstName} has arrived at the drop-off location. Share the delivery PIN to complete.`,
+      { type: 'rider_arrived_dropoff', deliveryId: id },
     );
 
     return {
@@ -923,16 +923,17 @@ export class DeliveryService {
   //  HELPER
   // ═══════════════════════════════════════════════
 
+  private generatePin(): string {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+  }
+
   private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371;
     const dLat = ((lat2 - lat1) * Math.PI) / 180;
     const dLon = ((lon2 - lon1) * Math.PI) / 180;
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
+      Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   }

@@ -10,6 +10,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { UserModule } from './account/user.module';
 import { MessageModule, MessageService } from '@libs/common/modules';
 import { GatewayModule } from '@libs/common/modules/gateway';
+import { MonnifyModule } from '@libs/common/modules/monnify';
 
 // FastMotion Delivery Modules
 import { DeliveryModule } from './delivery/delivery.module';
@@ -58,6 +59,7 @@ import { DisputeModule } from './dispute/dispute.module';
     RatingModule,
     DisputeModule,
     GatewayModule,
+    MonnifyModule,
   ],
   providers: [ShutdownService],
 })

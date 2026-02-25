@@ -3,14 +3,17 @@ import { AccountService } from './user.service';
 import { AccountController } from './user.controller';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { DatabaseModule, User, UserSchema } from '@libs/database';
+import { DatabaseModule, User, UserSchema, SavedAddress, SavedAddressSchema } from '@libs/database';
 import { HttpModule } from '@nestjs/axios';
 import { UploadFileService } from '@libs/common';
 import { AccountUserRepository } from './repository';
 
 @Module({
   imports: [
-    DatabaseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    DatabaseModule.forFeature([
+      { name: User.name, schema: UserSchema },
+      { name: SavedAddress.name, schema: SavedAddressSchema },
+    ]),
     HttpModule,
 
     JwtModule.registerAsync({

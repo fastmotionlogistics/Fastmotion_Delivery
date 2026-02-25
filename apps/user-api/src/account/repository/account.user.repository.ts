@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { User } from '@libs/database';
+import { User, SavedAddress, SavedAddressDocument } from '@libs/database';
 
 @Injectable()
 export class AccountUserRepository {
@@ -10,6 +10,8 @@ export class AccountUserRepository {
   constructor(
     @InjectModel('User')
     readonly model: Model<User>,
+    @InjectModel(SavedAddress.name)
+    readonly savedAddressModel: Model<SavedAddressDocument>,
   ) {}
 
   async create(data: Partial<User>): Promise<User> {

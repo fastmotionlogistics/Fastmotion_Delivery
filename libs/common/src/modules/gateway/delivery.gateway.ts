@@ -13,6 +13,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
+import * as crypto from 'crypto-js';
 import {
   DeliveryRequest,
   DeliveryRequestDocument,
@@ -24,6 +25,7 @@ import {
   ChatMessageType,
 } from '@libs/database';
 import { WS_EVENTS, WS_SERVER_EVENTS, getRoomName } from './ws-events';
+import { CrossServiceBridge } from './cross-service-bridge';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
@@ -38,9 +40,7 @@ interface AuthenticatedSocket extends Socket {
   pingInterval: 25000,
   pingTimeout: 60000,
 })
-export class DeliveryGateway
-  implements OnGatewayConnection, OnGatewayDisconnect
-{
+export class DeliveryGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
@@ -48,6 +48,9 @@ export class DeliveryGateway
 
   // userId → Set<socketId> for multi-device support
   private userSockets = new Map<string, Set<string>>();
+
+  // Unique ID for this service instance — used to avoid re-processing our own messages
+  private readonly serviceId = `${process.env.npm_package_name || 'svc'}_${process.pid}_${Date.now()}`;
 
   constructor(
     private readonly jwtService: JwtService,
@@ -58,7 +61,32 @@ export class DeliveryGateway
     private readonly chatMessageModel: Model<ChatMessageDocument>,
     @InjectModel(Rider.name)
     private readonly riderModel: Model<RiderDocument>,
-  ) {}
+    private readonly crossServiceBridge: CrossServiceBridge,
+  ) {
+    // Register handler for cross-service messages
+    this.crossServiceBridge.setMessageHandler((msg) => {
+      // Skip messages we published ourselves
+      if (msg.sourceService === this.serviceId) return;
+      if (!msg.room || !msg.event || !this.server) return;
+
+      // Handle user-targeted messages (room = "user:<userId>")
+      if (msg.room.startsWith('user:')) {
+        const userId = msg.room.replace('user:', '');
+        const sockets = this.userSockets.get(userId);
+        if (sockets) {
+          sockets.forEach((socketId) => {
+            this.server.to(socketId).emit(msg.event, msg.data);
+          });
+          this.logger.log(`[CrossService] Forwarded ${msg.event} to user ${userId} (${sockets.size} sockets)`);
+        }
+        return;
+      }
+
+      // Handle room-targeted messages (delivery rooms)
+      this.server.to(msg.room).emit(msg.event, msg.data);
+      this.logger.log(`[CrossService] Forwarded ${msg.event} to room ${msg.room}`);
+    });
+  }
 
   // ═══════════════════════════════════════════════
   //  CONNECTION LIFECYCLE
@@ -66,9 +94,7 @@ export class DeliveryGateway
 
   async handleConnection(client: AuthenticatedSocket) {
     this.logger.log(`Client connected: ${client.id}`);
-    const token =
-      client.handshake.auth?.token ||
-      client.handshake.headers?.authorization?.replace('Bearer ', '');
+    const token = client.handshake.auth?.token || client.handshake.headers?.authorization?.replace('Bearer ', '');
 
     if (token) {
       const userType = client.handshake.auth?.userType || 'customer';
@@ -77,9 +103,7 @@ export class DeliveryGateway
   }
 
   handleDisconnect(client: AuthenticatedSocket) {
-    this.logger.log(
-      `Client disconnected: ${client.id} (${client.userType}:${client.userId})`,
-    );
+    this.logger.log(`Client disconnected: ${client.id} (${client.userType}:${client.userId})`);
     if (client.userId) {
       const set = this.userSockets.get(client.userId);
       if (set) {
@@ -98,25 +122,29 @@ export class DeliveryGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { token: string; userType?: 'customer' | 'rider' },
   ) {
-    await this.authenticateClient(
-      client,
-      data.token,
-      data.userType || 'customer',
-    );
+    await this.authenticateClient(client, data.token, data.userType || 'customer');
   }
 
-  private async authenticateClient(
-    client: AuthenticatedSocket,
-    token: string,
-    userType: 'customer' | 'rider',
-  ) {
+  private async authenticateClient(client: AuthenticatedSocket, token: string, userType: 'customer' | 'rider') {
     try {
       const secret = this.configService.get<string>('JWT_SECRET');
-      const payload = this.jwtService.verify(token, { secret });
+      let payload = this.jwtService.verify(token, { secret });
+
+      // user-api JWTs are AES-encrypted: the payload is { data: <encrypted_string> }
+      // Decrypt to get the actual user payload (e.g. { user_id, email })
+      if (payload.data && typeof payload.data === 'string' && !payload.user_id && !payload.rider_id) {
+        try {
+          const decrypted = crypto.AES.decrypt(payload.data, secret).toString(crypto.enc.Utf8);
+          if (decrypted) {
+            payload = JSON.parse(decrypted);
+          }
+        } catch (decryptErr) {
+          this.logger.warn(`AES decrypt failed for ${client.id}: ${decryptErr.message}`);
+        }
+      }
 
       // user-api JWTs use `user_id`, delivery-api JWTs use `rider_id`
-      const userId =
-        payload.user_id || payload.rider_id || payload.sub || payload._id;
+      const userId = payload.user_id || payload.rider_id || payload.sub || payload._id;
 
       if (!userId) {
         throw new Error('No user id in token');
@@ -124,9 +152,7 @@ export class DeliveryGateway
 
       client.userId = String(userId);
       client.userType = payload.rider_id ? 'rider' : userType;
-      client.userName =
-        [payload.firstName, payload.lastName].filter(Boolean).join(' ') ||
-        'User';
+      client.userName = [payload.firstName, payload.lastName].filter(Boolean).join(' ') || 'User';
 
       // Track multi-device sockets
       if (!this.userSockets.has(client.userId)) {
@@ -138,9 +164,7 @@ export class DeliveryGateway
         userId: client.userId,
         userType: client.userType,
       });
-      this.logger.log(
-        `Authenticated ${client.userType}:${client.userId} on socket ${client.id}`,
-      );
+      this.logger.log(`Authenticated ${client.userType}:${client.userId} on socket ${client.id}`);
     } catch (err) {
       client.emit(WS_SERVER_EVENTS.AUTH_ERROR, {
         message: 'Invalid or expired token',
@@ -170,17 +194,13 @@ export class DeliveryGateway
       });
 
     const isParticipant =
-      delivery.customer?.toString() === client.userId ||
-      delivery.rider?.toString() === client.userId;
+      delivery.customer?.toString() === client.userId || delivery.rider?.toString() === client.userId;
 
-    if (!isParticipant)
-      return client.emit(WS_SERVER_EVENTS.ERROR, { message: 'Unauthorized' });
+    if (!isParticipant) return client.emit(WS_SERVER_EVENTS.ERROR, { message: 'Unauthorized' });
 
     const room = getRoomName.delivery(data.deliveryId);
     client.join(room);
-    this.logger.log(
-      `${client.userType}:${client.userId} → tracking room ${room}`,
-    );
+    this.logger.log(`${client.userType}:${client.userId} → tracking room ${room}`);
 
     // Send current rider location if rider is assigned
     if (delivery.rider) {
@@ -220,10 +240,7 @@ export class DeliveryGateway
   }
 
   @SubscribeMessage(WS_EVENTS.TRACKING_UNSUBSCRIBE)
-  onTrackingUnsubscribe(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { deliveryId: string },
-  ) {
+  onTrackingUnsubscribe(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { deliveryId: string }) {
     client.leave(getRoomName.delivery(data.deliveryId));
   }
 
@@ -259,21 +276,17 @@ export class DeliveryGateway
         },
       )
       .exec()
-      .catch((e) =>
-        this.logger.error(`Rider loc persist fail: ${e.message}`),
-      );
+      .catch((e) => this.logger.error(`Rider loc persist fail: ${e.message}`));
 
     // Broadcast to delivery tracking room
-    this.server
-      .to(getRoomName.delivery(data.deliveryId))
-      .emit(WS_SERVER_EVENTS.RIDER_LOCATION, {
-        deliveryId: data.deliveryId,
-        latitude: data.latitude,
-        longitude: data.longitude,
-        heading: data.heading,
-        speed: data.speed,
-        timestamp: new Date(),
-      });
+    this.server.to(getRoomName.delivery(data.deliveryId)).emit(WS_SERVER_EVENTS.RIDER_LOCATION, {
+      deliveryId: data.deliveryId,
+      latitude: data.latitude,
+      longitude: data.longitude,
+      heading: data.heading,
+      speed: data.speed,
+      timestamp: new Date(),
+    });
   }
 
   // ═══════════════════════════════════════════════
@@ -281,19 +294,13 @@ export class DeliveryGateway
   // ═══════════════════════════════════════════════
 
   @SubscribeMessage(WS_EVENTS.CHAT_JOIN)
-  async onChatJoin(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { deliveryId: string },
-  ) {
+  async onChatJoin(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { deliveryId: string }) {
     if (!client.userId)
       return client.emit(WS_SERVER_EVENTS.ERROR, {
         message: 'Not authenticated',
       });
 
-    const delivery = await this.deliveryModel
-      .findById(data.deliveryId)
-      .select('customer rider')
-      .lean();
+    const delivery = await this.deliveryModel.findById(data.deliveryId).select('customer rider').lean();
     if (!delivery)
       return client.emit(WS_SERVER_EVENTS.ERROR, {
         message: 'Delivery not found',
@@ -301,14 +308,11 @@ export class DeliveryGateway
 
     const isCustomer = delivery.customer?.toString() === client.userId;
     const isRider = delivery.rider?.toString() === client.userId;
-    if (!isCustomer && !isRider)
-      return client.emit(WS_SERVER_EVENTS.ERROR, { message: 'Unauthorized' });
+    if (!isCustomer && !isRider) return client.emit(WS_SERVER_EVENTS.ERROR, { message: 'Unauthorized' });
 
     const chatRoom = getRoomName.chat(data.deliveryId);
     client.join(chatRoom);
-    this.logger.log(
-      `${client.userType}:${client.userId} → chat ${chatRoom}`,
-    );
+    this.logger.log(`${client.userType}:${client.userId} → chat ${chatRoom}`);
 
     // Send history (last 50)
     const messages = await this.chatMessageModel
@@ -334,9 +338,7 @@ export class DeliveryGateway
     });
 
     // Mark opponent messages as read
-    const oppositeSender = isCustomer
-      ? ChatMessageSenderType.RIDER
-      : ChatMessageSenderType.CUSTOMER;
+    const oppositeSender = isCustomer ? ChatMessageSenderType.RIDER : ChatMessageSenderType.CUSTOMER;
 
     await this.chatMessageModel.updateMany(
       {
@@ -349,10 +351,7 @@ export class DeliveryGateway
   }
 
   @SubscribeMessage(WS_EVENTS.CHAT_LEAVE)
-  onChatLeave(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { deliveryId: string },
-  ) {
+  onChatLeave(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { deliveryId: string }) {
     client.leave(getRoomName.chat(data.deliveryId));
   }
 
@@ -382,10 +381,7 @@ export class DeliveryGateway
         message: 'Message content required',
       });
 
-    const delivery = await this.deliveryModel
-      .findById(data.deliveryId)
-      .select('customer rider status')
-      .lean();
+    const delivery = await this.deliveryModel.findById(data.deliveryId).select('customer rider status').lean();
     if (!delivery)
       return client.emit(WS_SERVER_EVENTS.ERROR, {
         message: 'Delivery not found',
@@ -393,14 +389,12 @@ export class DeliveryGateway
 
     const isCustomer = delivery.customer?.toString() === client.userId;
     const isRider = delivery.rider?.toString() === client.userId;
-    if (!isCustomer && !isRider)
-      return client.emit(WS_SERVER_EVENTS.ERROR, { message: 'Unauthorized' });
+    if (!isCustomer && !isRider) return client.emit(WS_SERVER_EVENTS.ERROR, { message: 'Unauthorized' });
 
     const chatMessage = await this.chatMessageModel.create({
+      _id: new Types.ObjectId(),
       deliveryRequest: new Types.ObjectId(data.deliveryId),
-      senderType: isCustomer
-        ? ChatMessageSenderType.CUSTOMER
-        : ChatMessageSenderType.RIDER,
+      senderType: isCustomer ? ChatMessageSenderType.CUSTOMER : ChatMessageSenderType.RIDER,
       senderId: new Types.ObjectId(client.userId),
       senderName: client.userName,
       messageType: data.messageType || ChatMessageType.TEXT,
@@ -424,9 +418,7 @@ export class DeliveryGateway
       createdAt: chatMessage.createdAt,
     };
 
-    this.server
-      .to(getRoomName.chat(data.deliveryId))
-      .emit(WS_SERVER_EVENTS.CHAT_NEW_MESSAGE, payload);
+    this.server.to(getRoomName.chat(data.deliveryId)).emit(WS_SERVER_EVENTS.CHAT_NEW_MESSAGE, payload);
   }
 
   // ═══════════════════════════════════════════════
@@ -439,28 +431,21 @@ export class DeliveryGateway
     @MessageBody() data: { deliveryId: string; isTyping: boolean },
   ) {
     if (!client.userId) return;
-    client
-      .to(getRoomName.chat(data.deliveryId))
-      .emit(WS_SERVER_EVENTS.CHAT_USER_TYPING, {
-        deliveryId: data.deliveryId,
-        userId: client.userId,
-        userType: client.userType,
-        userName: client.userName,
-        isTyping: data.isTyping,
-      });
+    client.to(getRoomName.chat(data.deliveryId)).emit(WS_SERVER_EVENTS.CHAT_USER_TYPING, {
+      deliveryId: data.deliveryId,
+      userId: client.userId,
+      userType: client.userType,
+      userName: client.userName,
+      isTyping: data.isTyping,
+    });
   }
 
   @SubscribeMessage(WS_EVENTS.CHAT_READ)
-  async onChatRead(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { deliveryId: string },
-  ) {
+  async onChatRead(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { deliveryId: string }) {
     if (!client.userId) return;
 
     const oppositeSender =
-      client.userType === 'customer'
-        ? ChatMessageSenderType.RIDER
-        : ChatMessageSenderType.CUSTOMER;
+      client.userType === 'customer' ? ChatMessageSenderType.RIDER : ChatMessageSenderType.CUSTOMER;
 
     await this.chatMessageModel.updateMany(
       {
@@ -471,14 +456,12 @@ export class DeliveryGateway
       { isRead: true, readAt: new Date() },
     );
 
-    client
-      .to(getRoomName.chat(data.deliveryId))
-      .emit(WS_SERVER_EVENTS.CHAT_MESSAGES_READ, {
-        deliveryId: data.deliveryId,
-        readBy: client.userId,
-        readByType: client.userType,
-        readAt: new Date(),
-      });
+    client.to(getRoomName.chat(data.deliveryId)).emit(WS_SERVER_EVENTS.CHAT_MESSAGES_READ, {
+      deliveryId: data.deliveryId,
+      readBy: client.userId,
+      readByType: client.userType,
+      readAt: new Date(),
+    });
   }
 
   // ═══════════════════════════════════════════════
@@ -486,18 +469,22 @@ export class DeliveryGateway
   // ═══════════════════════════════════════════════
 
   /** Broadcast status change to everyone watching this delivery */
-  emitDeliveryStatusUpdate(
-    deliveryId: string,
-    status: string,
-    extra?: Record<string, any>,
-  ) {
+  emitDeliveryStatusUpdate(deliveryId: string, status: string, extra?: Record<string, any>) {
     const room = getRoomName.delivery(deliveryId);
-    this.server.to(room).emit(WS_SERVER_EVENTS.DELIVERY_STATUS_UPDATE, {
+    const payload = {
       deliveryId,
       status,
       updatedAt: new Date(),
       ...extra,
-    });
+    };
+    this.server.to(room).emit(WS_SERVER_EVENTS.DELIVERY_STATUS_UPDATE, payload);
+    // Publish to Redis so other services (user-api / delivery-api) also broadcast
+    this.crossServiceBridge.publish(
+      WS_SERVER_EVENTS.DELIVERY_STATUS_UPDATE,
+      room,
+      payload,
+      this.serviceId,
+    );
     this.logger.log(`WS status → ${deliveryId}: ${status}`);
   }
 
@@ -511,33 +498,45 @@ export class DeliveryGateway
       speed?: number;
     },
   ) {
-    this.server
-      .to(getRoomName.delivery(deliveryId))
-      .emit(WS_SERVER_EVENTS.RIDER_LOCATION, {
-        deliveryId,
-        ...location,
-        timestamp: new Date(),
-      });
+    const room = getRoomName.delivery(deliveryId);
+    const payload = {
+      deliveryId,
+      ...location,
+      timestamp: new Date(),
+    };
+    this.server.to(room).emit(WS_SERVER_EVENTS.RIDER_LOCATION, payload);
+    // Cross-service broadcast
+    this.crossServiceBridge.publish(
+      WS_SERVER_EVENTS.RIDER_LOCATION,
+      room,
+      payload,
+      this.serviceId,
+    );
   }
 
   /** Broadcast ETA update */
-  emitETAUpdate(
-    deliveryId: string,
-    eta: { minutes: number; distance?: number },
-  ) {
-    this.server
-      .to(getRoomName.delivery(deliveryId))
-      .emit(WS_SERVER_EVENTS.DELIVERY_ETA_UPDATE, {
-        deliveryId,
-        estimatedMinutes: eta.minutes,
-        estimatedDistance: eta.distance,
-        updatedAt: new Date(),
-      });
+  emitETAUpdate(deliveryId: string, eta: { minutes: number; distance?: number }) {
+    const room = getRoomName.delivery(deliveryId);
+    const payload = {
+      deliveryId,
+      estimatedMinutes: eta.minutes,
+      estimatedDistance: eta.distance,
+      updatedAt: new Date(),
+    };
+    this.server.to(room).emit(WS_SERVER_EVENTS.DELIVERY_ETA_UPDATE, payload);
+    // Cross-service broadcast
+    this.crossServiceBridge.publish(
+      WS_SERVER_EVENTS.DELIVERY_ETA_UPDATE,
+      room,
+      payload,
+      this.serviceId,
+    );
   }
 
   /** Insert and broadcast a system chat message */
   async emitSystemChatMessage(deliveryId: string, content: string) {
     const msg = await this.chatMessageModel.create({
+      _id: new Types.ObjectId(),
       deliveryRequest: new Types.ObjectId(deliveryId),
       senderType: ChatMessageSenderType.SYSTEM,
       senderId: new Types.ObjectId('000000000000000000000000'),
@@ -547,19 +546,17 @@ export class DeliveryGateway
       isRead: false,
     });
 
-    this.server
-      .to(getRoomName.chat(deliveryId))
-      .emit(WS_SERVER_EVENTS.CHAT_NEW_MESSAGE, {
-        id: msg._id,
-        deliveryId,
-        senderType: ChatMessageSenderType.SYSTEM,
-        senderId: null,
-        senderName: 'FastMotion',
-        messageType: ChatMessageType.SYSTEM,
-        content,
-        isRead: false,
-        createdAt: msg.createdAt,
-      });
+    this.server.to(getRoomName.chat(deliveryId)).emit(WS_SERVER_EVENTS.CHAT_NEW_MESSAGE, {
+      id: msg._id,
+      deliveryId,
+      senderType: ChatMessageSenderType.SYSTEM,
+      senderId: null,
+      senderName: 'FastMotion',
+      messageType: ChatMessageType.SYSTEM,
+      content,
+      isRead: false,
+      createdAt: msg.createdAt,
+    });
   }
 
   /** Push a notification-style event to a specific user (all their sockets) */
@@ -570,5 +567,13 @@ export class DeliveryGateway
         this.server.to(socketId).emit(event, data);
       });
     }
+    // Also publish via Redis so other services can deliver to the user
+    // We use a special user-targeted room format
+    this.crossServiceBridge.publish(
+      event,
+      `user:${userId}`,
+      data,
+      this.serviceId,
+    );
   }
 }

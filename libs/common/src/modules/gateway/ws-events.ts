@@ -39,6 +39,9 @@ export const WS_SERVER_EVENTS = {
   CHAT_MESSAGES_READ: 'chat:messages_read',
   CHAT_HISTORY: 'chat:history',
 
+  // Rider-specific
+  NEW_DELIVERY_REQUEST: 'delivery:new_request', // broadcast to nearby riders
+
   // Errors
   ERROR: 'error',
 } as const;

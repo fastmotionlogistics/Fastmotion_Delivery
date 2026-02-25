@@ -4,141 +4,95 @@ import {
   Body,
   Headers,
   HttpCode,
-  RawBodyRequest,
-  Req,
+  Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiExcludeEndpoint } from '@nestjs/swagger';
 import { PaymentService } from './payment.service';
-import { ConfigService } from '@nestjs/config';
-import * as crypto from 'crypto';
+import { MonnifyService, MonnifyWebhookPayload } from '@libs/common/modules/monnify';
 
 /**
- * Webhook controller for payment provider callbacks (Paystack/Flutterwave)
- * PRD Section 9: Supported payment methods - Wallet, Card, Bank transfer
+ * Webhook controller for Monnify payment notifications.
  *
- * These endpoints are called by payment providers to confirm transactions.
- * No JWT auth — verified via provider-specific signatures.
+ * Flow:
+ * 1. User initiates payment → Monnify checkout page opens
+ * 2. User pays via card/bank transfer on Monnify
+ * 3. Monnify calls this webhook with payment result
+ * 4. We verify signature, verify transaction with Monnify API, then complete the delivery payment
+ *
+ * No JWT auth — verified via Monnify HMAC-SHA512 signature.
  */
 @ApiTags('Webhooks')
 @Controller('webhooks')
 export class WebhookController {
+  private readonly logger = new Logger(WebhookController.name);
+
   constructor(
     private readonly paymentService: PaymentService,
-    private readonly configService: ConfigService,
+    private readonly monnifyService: MonnifyService,
   ) {}
 
   @ApiExcludeEndpoint()
-  @ApiOperation({ summary: 'Paystack webhook handler' })
-  @Post('paystack')
+  @ApiOperation({ summary: 'Monnify webhook for payment notifications' })
+  @Post('monnify')
   @HttpCode(200)
-  async handlePaystackWebhook(
-    @Body() body: any,
-    @Headers('x-paystack-signature') signature: string,
+  async handleMonnifyWebhook(
+    @Body() body: { eventType: string; eventData: MonnifyWebhookPayload },
+    @Headers('monnify-signature') signature: string,
   ) {
-    // Verify webhook signature
-    const secret = this.configService.get<string>('PAYSTACK_SECRET_KEY');
-    if (secret) {
-      const hash = crypto
-        .createHmac('sha512', secret)
-        .update(JSON.stringify(body))
-        .digest('hex');
+    this.logger.log(`[Monnify Webhook] Event: ${body.eventType}, Ref: ${body.eventData?.paymentReference}`);
 
-      if (hash !== signature) {
-        return { status: 'error', message: 'Invalid signature' };
+    // 1. Verify webhook signature
+    if (!signature || !this.monnifyService.verifyWebhookSignature(body, signature)) {
+      this.logger.warn('[Monnify Webhook] Invalid signature — rejecting');
+      return { status: 'error', message: 'Invalid signature' };
+    }
+
+    const eventData = body.eventData;
+
+    if (!eventData || !eventData.paymentReference) {
+      this.logger.warn('[Monnify Webhook] Missing event data');
+      return { status: 'error', message: 'Missing event data' };
+    }
+
+    try {
+      // 2. Verify transaction with Monnify API (double-check)
+      const verification = await this.monnifyService.verifyPayment(eventData.transactionReference);
+      const verifiedStatus = verification.responseBody?.paymentStatus;
+
+      this.logger.log(
+        `[Monnify Webhook] Verified status: ${verifiedStatus} for ref: ${eventData.paymentReference}`,
+      );
+
+      if (this.monnifyService.isPaymentSuccessful(verifiedStatus)) {
+        // 3. Process successful payment
+        await this.paymentService.handleWebhookPaymentSuccess(
+          eventData.paymentReference,
+          {
+            providerReference: eventData.transactionReference,
+            providerResponse: JSON.stringify(verification.responseBody),
+            amount: verification.responseBody.amountPaid,
+          },
+        );
+
+        this.logger.log(`[Monnify Webhook] Payment completed: ${eventData.paymentReference}`);
+      } else if (this.monnifyService.isPaymentFailed(verifiedStatus)) {
+        // 4. Process failed payment
+        await this.paymentService.handleWebhookPaymentFailed(
+          eventData.paymentReference,
+          {
+            providerResponse: JSON.stringify(verification.responseBody),
+          },
+        );
+
+        this.logger.log(`[Monnify Webhook] Payment failed: ${eventData.paymentReference}`);
+      } else {
+        this.logger.log(`[Monnify Webhook] Payment still pending: ${verifiedStatus}`);
       }
+    } catch (error) {
+      this.logger.error(`[Monnify Webhook] Error processing: ${error.message}`, error.stack);
     }
 
-    const event = body.event;
-    const data = body.data;
-
-    switch (event) {
-      case 'charge.success':
-        // Payment was successful
-        await this.handleSuccessfulPayment(data);
-        break;
-
-      case 'transfer.success':
-        // Withdrawal/transfer completed
-        await this.handleSuccessfulTransfer(data);
-        break;
-
-      case 'transfer.failed':
-        // Withdrawal/transfer failed
-        await this.handleFailedTransfer(data);
-        break;
-
-      case 'charge.failed':
-        // Payment failed
-        await this.handleFailedPayment(data);
-        break;
-
-      default:
-        // Log unhandled events
-        console.log(`[Webhook] Unhandled Paystack event: ${event}`);
-    }
-
+    // Always return 200 to Monnify so they don't retry
     return { status: 'success' };
-  }
-
-  private async handleSuccessfulPayment(data: any) {
-    try {
-      const reference = data.reference;
-      const amount = data.amount / 100; // Paystack sends amount in kobo
-
-      // Verify and complete the payment
-      // The paymentService.verifyPayment already handles status updates
-      // This is called with a system-level user context
-      console.log(`[Webhook] Payment success: ${reference}, Amount: ${amount}`);
-
-      // Direct DB update via payment service internal method
-      await this.paymentService.handleWebhookPaymentSuccess(reference, {
-        providerReference: data.id?.toString(),
-        providerResponse: JSON.stringify(data),
-        amount,
-      });
-    } catch (error) {
-      console.error(`[Webhook] Error processing payment success:`, error);
-    }
-  }
-
-  private async handleFailedPayment(data: any) {
-    try {
-      const reference = data.reference;
-      console.log(`[Webhook] Payment failed: ${reference}`);
-
-      await this.paymentService.handleWebhookPaymentFailed(reference, {
-        providerResponse: JSON.stringify(data),
-      });
-    } catch (error) {
-      console.error(`[Webhook] Error processing payment failure:`, error);
-    }
-  }
-
-  private async handleSuccessfulTransfer(data: any) {
-    try {
-      const reference = data.reference;
-      console.log(`[Webhook] Transfer success: ${reference}`);
-
-      await this.paymentService.handleWebhookTransferSuccess(reference, {
-        providerReference: data.transfer_code,
-        providerResponse: JSON.stringify(data),
-      });
-    } catch (error) {
-      console.error(`[Webhook] Error processing transfer success:`, error);
-    }
-  }
-
-  private async handleFailedTransfer(data: any) {
-    try {
-      const reference = data.reference;
-      console.log(`[Webhook] Transfer failed: ${reference}`);
-
-      await this.paymentService.handleWebhookTransferFailed(reference, {
-        providerResponse: JSON.stringify(data),
-        reason: data.reason || 'Transfer failed',
-      });
-    } catch (error) {
-      console.error(`[Webhook] Error processing transfer failure:`, error);
-    }
   }
 }

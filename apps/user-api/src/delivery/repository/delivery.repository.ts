@@ -16,6 +16,10 @@ import {
   PricingConfigDocument,
   Rider,
   RiderDocument,
+  ItemCategory,
+  ItemCategoryDocument,
+  SpecialHandling,
+  SpecialHandlingDocument,
 } from '@libs/database';
 
 @Injectable()
@@ -35,7 +39,30 @@ export class DeliveryRepository {
     readonly pricingConfigModel: Model<PricingConfigDocument>,
     @InjectModel(Rider.name)
     readonly riderModel: Model<RiderDocument>,
+    @InjectModel(ItemCategory.name)
+    readonly itemCategoryModel: Model<ItemCategoryDocument>,
+    @InjectModel(SpecialHandling.name)
+    readonly specialHandlingModel: Model<SpecialHandlingDocument>,
   ) {}
+
+  // Item Category methods
+  async findActiveCategories() {
+    return this.itemCategoryModel.find({ status: 'active' }).sort({ sortOrder: 1 }).lean();
+  }
+
+  async findCategoryBySlug(slug: string): Promise<ItemCategory | null> {
+    return this.itemCategoryModel.findOne({ slug, status: 'active' }).lean();
+  }
+
+  // Special Handling methods
+  async findActiveHandling() {
+    return this.specialHandlingModel.find({ status: 'active' }).sort({ sortOrder: 1 }).lean();
+  }
+
+  async findHandlingBySlugs(slugs: string[]) {
+    if (!slugs || slugs.length === 0) return [];
+    return this.specialHandlingModel.find({ slug: { $in: slugs }, status: 'active' }).lean();
+  }
 
   async create(data: Partial<DeliveryRequest>): Promise<DeliveryRequest> {
     const delivery = new this.deliveryModel({
@@ -73,13 +100,42 @@ export class DeliveryRepository {
 
   async findByCustomer(
     customerId: Types.ObjectId,
-    filters: { status?: string; page?: number; limit?: number } = {},
+    filters: {
+      status?: string;
+      deliveryType?: string;
+      search?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      page?: number;
+      limit?: number;
+    } = {},
   ): Promise<{ data: DeliveryRequest[]; total: number }> {
-    const { status, page = 1, limit = 20 } = filters;
+    const { status, deliveryType, search, dateFrom, dateTo, page = 1, limit = 20 } = filters;
     const query: FilterQuery<DeliveryRequest> = { customer: customerId };
 
     if (status) {
       query.status = status;
+    }
+
+    if (deliveryType) {
+      query.deliveryType = deliveryType;
+    }
+
+    // Search by tracking number (case-insensitive partial match)
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      query.trackingNumber = { $regex: escaped, $options: 'i' } as any;
+    }
+
+    // Date range filter
+    if (dateFrom || dateTo) {
+      query.createdAt = {} as any;
+      if (dateFrom) (query.createdAt as any).$gte = new Date(dateFrom);
+      if (dateTo) {
+        const end = new Date(dateTo);
+        end.setHours(23, 59, 59, 999);
+        (query.createdAt as any).$lte = end;
+      }
     }
 
     const [data, total] = await Promise.all([
@@ -181,8 +237,6 @@ export class DeliveryRepository {
     latitude: number,
     longitude: number,
   ): Promise<LocationZone | null> {
-    // Find zone by checking if point is within radius of center point
-    // For production, use MongoDB geospatial queries with 2dsphere index
     const zones = await this.zoneModel
       .find({ status: 'active' })
       .sort({ priority: -1 })
@@ -258,10 +312,21 @@ export class DeliveryRepository {
   }
 
   // Helper methods
+  /**
+   * Generate a tracking number in the format FM-XXXX-XX
+   * e.g. FM-KJHS-3H, FM-A9BZ-7K
+   * Uses alphanumeric chars (no 0/O/I/1 to avoid confusion)
+   */
   generateTrackingNumber(): string {
-    const timestamp = Date.now().toString(36).toUpperCase();
-    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    return `FM${timestamp}${random}`;
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const pick = (len: number) => {
+      let s = '';
+      for (let i = 0; i < len; i++) {
+        s += chars[Math.floor(Math.random() * chars.length)];
+      }
+      return s;
+    };
+    return `FM-${pick(4)}-${pick(2)}`;
   }
 
   generatePin(): string {
@@ -274,8 +339,7 @@ export class DeliveryRepository {
     lat2: number,
     lon2: number,
   ): number {
-    // Haversine formula for distance calculation
-    const R = 6371; // Earth's radius in km
+    const R = 6371;
     const dLat = this.toRad(lat2 - lat1);
     const dLon = this.toRad(lon2 - lon1);
     const a =
@@ -302,7 +366,6 @@ export class DeliveryRepository {
   }
 
   estimateDuration(distanceKm: number): number {
-    // Estimate based on average speed of 30 km/h in urban areas
     const averageSpeedKmH = 30;
     return Math.ceil((distanceKm / averageSpeedKmH) * 60);
   }

@@ -27,11 +27,25 @@ export class PaymentController {
     return await this.paymentService.initiatePayment(user, body);
   }
 
-  @ApiOperation({ summary: 'Verify payment status' })
+  @ApiOperation({ summary: 'Verify / poll payment status' })
   @ApiBody({ type: VerifyPaymentDto })
   @Post('verify')
   async verifyPayment(@CurrentUser() user: User, @Body() body: VerifyPaymentDto) {
     return await this.paymentService.verifyPayment(user, body);
+  }
+
+  @ApiOperation({
+    summary: 'Poll payment status by reference',
+    description:
+      'Mobile app calls this after Monnify checkout to check if payment has been confirmed. ' +
+      'If still pending, the service also checks with Monnify API to catch payments before webhook arrives.',
+  })
+  @Get('status/:reference')
+  async getPaymentStatus(
+    @CurrentUser() user: User,
+    @Param('reference') reference: string,
+  ) {
+    return await this.paymentService.getPaymentStatus(user, reference);
   }
 
   @ApiOperation({ summary: 'Get wallet balance' })
@@ -40,7 +54,7 @@ export class PaymentController {
     return await this.paymentService.getWalletBalance(user);
   }
 
-  @ApiOperation({ summary: 'Fund wallet' })
+  @ApiOperation({ summary: 'Fund wallet via Monnify' })
   @ApiBody({ type: FundWalletDto })
   @Post('wallet/fund')
   async fundWallet(@CurrentUser() user: User, @Body() body: FundWalletDto) {

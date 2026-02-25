@@ -20,3 +20,16 @@ export * from './locationZone.schema';
 export * from './weightPricing.schema';
 export * from './timePricing.schema';
 export * from './pricingConfig.schema';
+
+// Notification
+export * from './notification.schema';
+
+// Item Category & Special Handling
+export * from './itemCategory.schema';
+export * from './specialHandling.schema';
+
+// Saved Address
+export * from './savedAddress.schema';
+
+// Admin
+export * from './admin.schema';

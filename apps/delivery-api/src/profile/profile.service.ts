@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { Rider } from '@libs/database';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Rider, RiderDocument } from '@libs/database';
 import {
   UpdateProfileDto,
   UpdateVehicleDto,
@@ -11,10 +13,12 @@ import {
 
 @Injectable()
 export class ProfileService {
-  constructor() {}
+  constructor(
+    @InjectModel(Rider.name)
+    private readonly riderModel: Model<RiderDocument>,
+  ) {}
 
   async getProfile(rider: Rider) {
-    // TODO: Implement get profile
     return {
       success: true,
       message: 'Profile retrieved',
@@ -23,52 +27,108 @@ export class ProfileService {
   }
 
   async updateProfile(rider: Rider, body: UpdateProfileDto) {
-    // TODO: Implement update profile
+    const updateFields: Record<string, any> = {};
+    if (body.firstName) updateFields.firstName = body.firstName;
+    if (body.lastName) updateFields.lastName = body.lastName;
+    if (body.gender) updateFields.gender = body.gender;
+    if (body.dob) updateFields.dob = body.dob;
+    if (body.address) updateFields.address = body.address;
+    if (body.city) updateFields.city = body.city;
+    if (body.state) updateFields.state = body.state;
+
+    if (Object.keys(updateFields).length > 0) {
+      await this.riderModel.updateOne({ _id: rider._id }, { $set: updateFields });
+    }
+
     return {
       success: true,
       message: 'Profile updated successfully',
-      data: null,
+      data: updateFields,
     };
   }
 
   async updateVehicle(rider: Rider, body: UpdateVehicleDto) {
-    // TODO: Implement update vehicle
+    const updateFields: Record<string, any> = {};
+    if (body.vehicleType) updateFields.vehicleType = body.vehicleType;
+    if (body.vehiclePlateNumber) updateFields.vehiclePlateNumber = body.vehiclePlateNumber;
+    if (body.vehicleModel) updateFields.vehicleModel = body.vehicleModel;
+    if (body.vehicleColor) updateFields.vehicleColor = body.vehicleColor;
+
+    if (Object.keys(updateFields).length > 0) {
+      await this.riderModel.updateOne({ _id: rider._id }, { $set: updateFields });
+    }
+
     return {
       success: true,
       message: 'Vehicle information updated',
-      data: null,
+      data: updateFields,
     };
   }
 
   async uploadDocument(rider: Rider, body: UploadDocumentDto) {
-    // TODO: Implement upload document
+    const updateFields: Record<string, any> = {};
+    updateFields[body.documentType] = body.documentUrl;
+
+    await this.riderModel.updateOne({ _id: rider._id }, { $set: updateFields });
+
     return {
       success: true,
       message: 'Document uploaded successfully',
-      data: null,
+      data: { documentType: body.documentType },
     };
   }
 
   async updateBankDetails(rider: Rider, body: UpdateBankDetailsDto) {
-    // TODO: Implement update bank details
+    await this.riderModel.updateOne(
+      { _id: rider._id },
+      {
+        $set: {
+          bankName: body.bankName,
+          bankAccountNumber: body.bankAccountNumber,
+          bankAccountName: body.bankAccountName,
+        },
+      },
+    );
+
     return {
       success: true,
       message: 'Bank details updated',
-      data: null,
+      data: {
+        bankName: body.bankName,
+        bankAccountName: body.bankAccountName,
+      },
     };
   }
 
   async updateLocation(rider: Rider, body: UpdateLocationDto) {
-    // TODO: Implement update location
+    await this.riderModel.updateOne(
+      { _id: rider._id },
+      {
+        $set: {
+          currentLatitude: body.latitude,
+          currentLongitude: body.longitude,
+          lastLocationUpdate: new Date(),
+        },
+      },
+    );
+
     return {
       success: true,
       message: 'Location updated',
-      data: null,
+      data: {
+        latitude: body.latitude,
+        longitude: body.longitude,
+        updatedAt: new Date(),
+      },
     };
   }
 
   async updateFcmToken(rider: Rider, body: UpdateFcmTokenDto) {
-    // TODO: Implement update FCM token
+    await this.riderModel.updateOne(
+      { _id: rider._id },
+      { $set: { fcmToken: body.fcmToken } },
+    );
+
     return {
       success: true,
       message: 'FCM token updated',
@@ -77,7 +137,6 @@ export class ProfileService {
   }
 
   async getVerificationStatus(rider: Rider) {
-    // TODO: Implement get verification status
     return {
       success: true,
       message: 'Verification status retrieved',
@@ -94,7 +153,6 @@ export class ProfileService {
   }
 
   async getRiderStats(rider: Rider) {
-    // TODO: Implement get rider stats
     return {
       success: true,
       message: 'Statistics retrieved',

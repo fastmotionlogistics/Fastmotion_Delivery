@@ -11,6 +11,7 @@ import {
   ChatMessageSchema,
 } from '@libs/database';
 import { DeliveryGateway } from './delivery.gateway';
+import { CrossServiceBridge } from './cross-service-bridge';
 
 @Module({
   imports: [
@@ -27,7 +28,7 @@ import { DeliveryGateway } from './delivery.gateway';
       inject: [ConfigService],
     }),
   ],
-  providers: [DeliveryGateway],
-  exports: [DeliveryGateway],
+  providers: [DeliveryGateway, CrossServiceBridge],
+  exports: [DeliveryGateway, CrossServiceBridge],
 })
 export class GatewayModule {}

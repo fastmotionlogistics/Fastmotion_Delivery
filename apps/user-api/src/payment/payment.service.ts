@@ -3,6 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Types } from 'mongoose';
@@ -15,12 +16,18 @@ import {
 import { PaymentRepository } from './repository';
 import { InitiatePaymentDto, FundWalletDto, VerifyPaymentDto, WithdrawDto } from './dto';
 import { TransactionCategory } from '@libs/database/schemas/walletTransaction.schema';
+import { MonnifyService } from '@libs/common/modules/monnify';
+import { DeliveryGateway } from '@libs/common/modules/gateway';
 
 @Injectable()
 export class PaymentService {
+  private readonly logger = new Logger(PaymentService.name);
+
   constructor(
     private readonly paymentRepository: PaymentRepository,
     private readonly eventEmitter: EventEmitter2,
+    private readonly monnifyService: MonnifyService,
+    private readonly gateway: DeliveryGateway,
   ) {}
 
   async initiatePayment(user: User, body: InitiatePaymentDto) {
@@ -50,6 +57,10 @@ export class PaymentService {
       DeliveryStatusEnum.RIDER_ARRIVED_PICKUP,
       DeliveryStatusEnum.SCHEDULED,
       DeliveryStatusEnum.PENDING,
+      DeliveryStatusEnum.SEARCHING_RIDER,
+      DeliveryStatusEnum.RIDER_ACCEPTED,
+      DeliveryStatusEnum.RIDER_ASSIGNED,
+      DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP,
     ];
     if (!allowedStatuses.includes(delivery.status as DeliveryStatusEnum)) {
       throw new BadRequestException('Payment is not allowed at this stage');
@@ -64,8 +75,8 @@ export class PaymentService {
       return this.processWalletPayment(user, delivery, amount);
     }
 
-    // For card/bank transfer, initiate external payment
-    return this.initiateExternalPayment(user, delivery, amount, body.paymentMethod);
+    // For card/bank transfer, initiate Monnify payment
+    return this.initiateMonnifyPayment(user, delivery, amount, body.paymentMethod);
   }
 
   private async processWalletPayment(user: User, delivery: any, amount: number) {
@@ -111,11 +122,31 @@ export class PaymentService {
         { deliveryId: delivery._id.toString(), paymentId: payment._id.toString() },
       );
 
-    // Update delivery payment status
-    await this.paymentRepository.updateDeliveryPaymentStatus(
-      delivery._id,
-      DeliveryPaymentStatusEnum.PAID,
-      payment._id,
+    // Generate PINs and update delivery
+    const pickupPin = Math.floor(1000 + Math.random() * 9000).toString();
+    const deliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
+
+    // Determine the correct next status
+    const isQuickDelivery = delivery.deliveryType === 'quick';
+    const newStatus = isQuickDelivery
+      ? DeliveryStatusEnum.PAYMENT_CONFIRMED
+      : DeliveryStatusEnum.SCHEDULED;
+
+    await this.paymentRepository.deliveryModel.findByIdAndUpdate(delivery._id, {
+      $set: {
+        paymentStatus: DeliveryPaymentStatusEnum.PAID,
+        payment: payment._id,
+        pickupPin,
+        deliveryPin,
+        status: newStatus,
+      },
+    });
+
+    // WS: broadcast payment confirmed
+    this.gateway.emitDeliveryStatusUpdate(
+      delivery._id.toString(),
+      newStatus,
+      { paymentStatus: 'paid' },
     );
 
     // Emit payment completed event
@@ -135,7 +166,7 @@ export class PaymentService {
           id: payment._id,
           reference: payment.reference,
           amount: payment.amount,
-          status: payment.status,
+          status: DeliveryPaymentStatusEnum.PAID,
           method: payment.paymentMethod,
           paidAt: payment.paidAt,
         },
@@ -144,12 +175,17 @@ export class PaymentService {
           currency: updatedWallet.currency,
           currencySymbol: updatedWallet.currencySymbol,
         },
+        delivery: {
+          status: newStatus,
+          pickupPin,
+          deliveryPin,
+        },
         transactionRef: transaction.transactionRef,
       },
     };
   }
 
-  private async initiateExternalPayment(
+  private async initiateMonnifyPayment(
     user: User,
     delivery: any,
     amount: number,
@@ -167,12 +203,38 @@ export class PaymentService {
       currency: 'NGN',
       paymentMethod,
       status: DeliveryPaymentStatusEnum.PENDING,
-      provider: 'paystack',
+      provider: 'monnify',
       description: `Payment for delivery ${delivery.trackingNumber}`,
     });
 
-    // In production, integrate with Paystack/Flutterwave
-    const paymentUrl = `https://checkout.paystack.com/${paymentReference}`;
+    // Map our payment method to Monnify's
+    const monnifyMethods =
+      paymentMethod === DeliveryPaymentMethodEnum.CARD
+        ? ['CARD']
+        : paymentMethod === DeliveryPaymentMethodEnum.BANK_TRANSFER
+          ? ['ACCOUNT_TRANSFER']
+          : ['CARD', 'ACCOUNT_TRANSFER'];
+
+    // Initialize Monnify transaction
+    const monnifyResult = await this.monnifyService.initializePayment({
+      amount,
+      customerName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Customer',
+      customerEmail: user.email,
+      paymentReference,
+      paymentDescription: `FastMotion delivery ${delivery.trackingNumber}`,
+      paymentMethods: monnifyMethods,
+      metaData: {
+        deliveryId: delivery._id.toString(),
+        userId: userId.toString(),
+        trackingNumber: delivery.trackingNumber,
+        deliveryType: delivery.deliveryType,
+      },
+    });
+
+    // Save the Monnify transaction reference
+    await this.paymentRepository.updatePaymentByReference(paymentReference, {
+      providerReference: monnifyResult.responseBody?.transactionReference,
+    });
 
     return {
       success: true,
@@ -185,107 +247,126 @@ export class PaymentService {
           status: payment.status,
           method: payment.paymentMethod,
         },
-        paymentUrl,
-        provider: 'paystack',
+        checkoutUrl: monnifyResult.responseBody?.checkoutUrl,
+        transactionReference: monnifyResult.responseBody?.transactionReference,
+        provider: 'monnify',
       },
     };
   }
 
-  async verifyPayment(user: User, body: VerifyPaymentDto) {
+  // ── Payment status polling (for mobile app to check after card/bank payment) ──
+
+  async getPaymentStatus(user: User, reference: string) {
     const userId = new Types.ObjectId(user._id);
 
-    // Find payment by reference
-    const payment = await this.paymentRepository.findPaymentByReference(body.reference);
+    const payment = await this.paymentRepository.findPaymentByReference(reference);
     if (!payment) {
       throw new NotFoundException('Payment not found');
     }
 
-    // Verify ownership
     if (payment.user.toString() !== userId.toString()) {
       throw new ForbiddenException('You do not have access to this payment');
     }
 
-    // If already paid, return success
-    if (payment.status === DeliveryPaymentStatusEnum.PAID) {
-      return {
-        success: true,
-        message: 'Payment already verified',
-        data: {
-          payment: {
-            id: payment._id,
-            reference: payment.reference,
-            amount: payment.amount,
-            status: payment.status,
-            paidAt: payment.paidAt,
-          },
-        },
-      };
+    // If still pending and has a Monnify reference, verify with Monnify
+    if (
+      payment.status === DeliveryPaymentStatusEnum.PENDING &&
+      payment.providerReference
+    ) {
+      try {
+        const verification = await this.monnifyService.verifyPayment(payment.providerReference);
+        const verifiedStatus = verification.responseBody?.paymentStatus;
+
+        if (this.monnifyService.isPaymentSuccessful(verifiedStatus)) {
+          // Process the payment (generates PINs, updates delivery)
+          await this.handleWebhookPaymentSuccess(reference, {
+            providerReference: payment.providerReference,
+            providerResponse: JSON.stringify(verification.responseBody),
+            amount: verification.responseBody.amountPaid,
+          });
+
+          // Reload payment + fetch delivery with PINs
+          const updatedPayment = await this.paymentRepository.findPaymentByReference(reference);
+          let deliveryData: any = {};
+          if (payment.deliveryRequest) {
+            const delivery = await this.paymentRepository.deliveryModel
+              .findById(payment.deliveryRequest)
+              .select('+pickupPin +deliveryPin')
+              .lean();
+            if (delivery) {
+              deliveryData = {
+                deliveryId: delivery._id,
+                pickupPin: delivery.pickupPin,
+                deliveryPin: delivery.deliveryPin,
+                deliveryStatus: delivery.status,
+              };
+            }
+          }
+
+          return {
+            success: true,
+            message: 'Payment confirmed',
+            data: {
+              status: DeliveryPaymentStatusEnum.PAID,
+              paidAt: updatedPayment?.paidAt,
+              ...deliveryData,
+            },
+          };
+        } else if (this.monnifyService.isPaymentFailed(verifiedStatus)) {
+          await this.handleWebhookPaymentFailed(reference, {
+            providerResponse: JSON.stringify(verification.responseBody),
+          });
+
+          return {
+            success: true,
+            message: 'Payment failed',
+            data: {
+              status: DeliveryPaymentStatusEnum.FAILED,
+            },
+          };
+        }
+      } catch (error) {
+        this.logger.warn(`Payment verification check failed for ${reference}: ${error.message}`);
+      }
     }
 
-    // In production, verify with payment provider (Paystack/Flutterwave)
-    const isVerified = true;
-
-    if (isVerified) {
-      // Update payment status
-      const updatedPayment = await this.paymentRepository.updatePaymentByReference(
-        body.reference,
-        {
-          status: DeliveryPaymentStatusEnum.PAID,
-          paidAt: new Date(),
-          providerResponse: JSON.stringify({ verified: true }),
-        },
-      );
-
-      // Update delivery payment status
-      if (payment.deliveryRequest) {
-        await this.paymentRepository.updateDeliveryPaymentStatus(
-          payment.deliveryRequest,
-          DeliveryPaymentStatusEnum.PAID,
-          payment._id as Types.ObjectId,
-        );
-      }
-
-      // Emit payment completed event
-      this.eventEmitter.emit('payment.completed', {
-        paymentId: payment._id,
-        deliveryId: payment.deliveryRequest,
-        userId,
-        amount: payment.amount,
-        method: payment.paymentMethod,
-      });
+    // If already paid, return PINs from the delivery
+    if (payment.status === DeliveryPaymentStatusEnum.PAID && payment.deliveryRequest) {
+      const delivery = await this.paymentRepository.deliveryModel
+        .findById(payment.deliveryRequest)
+        .select('+pickupPin +deliveryPin')
+        .lean();
 
       return {
         success: true,
-        message: 'Payment verified successfully',
+        message: 'Payment status retrieved',
         data: {
-          payment: {
-            id: updatedPayment?._id,
-            reference: updatedPayment?.reference,
-            amount: updatedPayment?.amount,
-            status: updatedPayment?.status,
-            paidAt: updatedPayment?.paidAt,
-          },
+          status: payment.status,
+          paidAt: payment.paidAt,
+          pickupPin: delivery?.pickupPin,
+          deliveryPin: delivery?.deliveryPin,
+          deliveryStatus: delivery?.status,
         },
       };
     }
 
     return {
-      success: false,
-      message: 'Payment verification failed',
+      success: true,
+      message: 'Payment status retrieved',
       data: {
-        payment: {
-          id: payment._id,
-          reference: payment.reference,
-          status: payment.status,
-        },
+        status: payment.status,
+        paidAt: payment.paidAt,
       },
     };
   }
 
+  async verifyPayment(user: User, body: VerifyPaymentDto) {
+    // Delegate to getPaymentStatus which also does Monnify verification
+    return this.getPaymentStatus(user, body.reference);
+  }
+
   async getWalletBalance(user: User) {
     const userId = new Types.ObjectId(user._id);
-
-    // Get or create wallet
     const wallet = await this.paymentRepository.getOrCreateWallet(userId);
 
     return {
@@ -311,8 +392,6 @@ export class PaymentService {
 
   async fundWallet(user: User, body: FundWalletDto) {
     const userId = new Types.ObjectId(user._id);
-
-    // Get or create wallet
     const wallet = await this.paymentRepository.getOrCreateWallet(userId);
 
     if (wallet.isLocked) {
@@ -321,7 +400,7 @@ export class PaymentService {
 
     const paymentReference = this.paymentRepository.generatePaymentReference();
 
-    // Create pending payment record for wallet funding
+    // Create pending payment record
     const payment = await this.paymentRepository.createPayment({
       reference: paymentReference,
       user: userId,
@@ -332,12 +411,31 @@ export class PaymentService {
           ? DeliveryPaymentMethodEnum.CARD
           : DeliveryPaymentMethodEnum.BANK_TRANSFER,
       status: DeliveryPaymentStatusEnum.PENDING,
-      provider: 'paystack',
+      provider: 'monnify',
       description: 'Wallet funding',
     });
 
-    // In production, integrate with Paystack/Flutterwave
-    const paymentUrl = `https://checkout.paystack.com/${paymentReference}`;
+    const monnifyMethods =
+      body.fundingMethod === 'card' ? ['CARD'] : ['ACCOUNT_TRANSFER'];
+
+    // Initialize Monnify
+    const monnifyResult = await this.monnifyService.initializePayment({
+      amount: body.amount,
+      customerName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Customer',
+      customerEmail: user.email,
+      paymentReference,
+      paymentDescription: 'FastMotion wallet funding',
+      paymentMethods: monnifyMethods,
+      metaData: {
+        userId: userId.toString(),
+        type: 'wallet_funding',
+      },
+    });
+
+    // Save Monnify transaction reference
+    await this.paymentRepository.updatePaymentByReference(paymentReference, {
+      providerReference: monnifyResult.responseBody?.transactionReference,
+    });
 
     return {
       success: true,
@@ -349,8 +447,9 @@ export class PaymentService {
           amount: payment.amount,
           status: payment.status,
         },
-        paymentUrl,
-        provider: 'paystack',
+        checkoutUrl: monnifyResult.responseBody?.checkoutUrl,
+        transactionReference: monnifyResult.responseBody?.transactionReference,
+        provider: 'monnify',
       },
     };
   }
@@ -366,27 +465,20 @@ export class PaymentService {
     }
 
     if (payment.status === DeliveryPaymentStatusEnum.PAID) {
-      return {
-        success: true,
-        message: 'Wallet funding already completed',
-        data: { payment },
-      };
+      return { success: true, message: 'Wallet funding already completed', data: { payment } };
     }
 
-    // Get wallet
     const wallet = await this.paymentRepository.getOrCreateWallet(userId);
 
-    // Process wallet funding
     const { wallet: updatedWallet, transaction } =
       await this.paymentRepository.processWalletFunding(
         wallet,
         payment.amount,
-        'Wallet funding via card',
+        'Wallet funding via Monnify',
         reference,
         { paymentId: payment._id?.toString() },
       );
 
-    // Update payment status
     await this.paymentRepository.updatePaymentByReference(reference, {
       status: DeliveryPaymentStatusEnum.PAID,
       paidAt: new Date(),
@@ -396,10 +488,7 @@ export class PaymentService {
       success: true,
       message: 'Wallet funded successfully',
       data: {
-        wallet: {
-          balance: updatedWallet.depositBalance,
-          currency: updatedWallet.currency,
-        },
+        wallet: { balance: updatedWallet.depositBalance, currency: updatedWallet.currency },
         transactionRef: transaction.transactionRef,
         amountAdded: payment.amount,
       },
@@ -408,25 +497,19 @@ export class PaymentService {
 
   async withdrawFromWallet(user: User, body: WithdrawDto) {
     const userId = new Types.ObjectId(user._id);
-
-    // Get wallet
     const wallet = await this.paymentRepository.findWalletByUser(userId);
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
+    if (!wallet) throw new NotFoundException('Wallet not found');
 
     if (wallet.isLocked) {
       throw new BadRequestException('Your wallet is temporarily locked. Please contact support.');
     }
 
-    // Check withdrawable balance
     if (wallet.withdrawableBalance < body.amount) {
       throw new BadRequestException(
         `Insufficient withdrawable balance. Available: ₦${wallet.withdrawableBalance.toLocaleString()}`,
       );
     }
 
-    // Create a pending withdrawal request
     const withdrawalRef = this.paymentRepository.generatePaymentReference();
 
     const payment = await this.paymentRepository.createPayment({
@@ -445,38 +528,25 @@ export class PaymentService {
       },
     });
 
-    // Emit withdrawal request event
     this.eventEmitter.emit('wallet.withdrawal.requested', {
       userId,
       amount: body.amount,
       reference: withdrawalRef,
-      bankDetails: {
-        accountNumber: body.bankAccountNumber,
-        bankName: body.bankName,
-      },
+      bankDetails: { accountNumber: body.bankAccountNumber, bankName: body.bankName },
     });
 
     return {
       success: true,
       message: 'Withdrawal request submitted. Processing may take 1-3 business days.',
       data: {
-        withdrawal: {
-          reference: payment.reference,
-          amount: payment.amount,
-          status: 'processing',
-        },
+        withdrawal: { reference: payment.reference, amount: payment.amount, status: 'processing' },
       },
     };
   }
 
   async getWalletTransactions(user: User, filters: { page?: number; limit?: number }) {
     const userId = new Types.ObjectId(user._id);
-
-    const { data, total } = await this.paymentRepository.findWalletTransactions(
-      userId,
-      filters,
-    );
-
+    const { data, total } = await this.paymentRepository.findWalletTransactions(userId, filters);
     const page = filters.page || 1;
     const limit = filters.limit || 20;
 
@@ -496,23 +566,15 @@ export class PaymentService {
           status: tx.status,
           createdAt: tx.createdAt,
         })),
-        pagination: {
-          total,
-          page,
-          limit,
-          pages: Math.ceil(total / limit),
-        },
+        pagination: { total, page, limit, pages: Math.ceil(total / limit) },
       },
     };
   }
 
   async getPaymentById(user: User, id: string) {
     const userId = new Types.ObjectId(user._id);
-
     const payment = await this.paymentRepository.findPaymentById(id);
-    if (!payment) {
-      throw new NotFoundException('Payment not found');
-    }
+    if (!payment) throw new NotFoundException('Payment not found');
 
     if (payment.user.toString() !== userId.toString()) {
       throw new ForbiddenException('You do not have access to this payment');
@@ -543,9 +605,7 @@ export class PaymentService {
 
   async getPaymentHistory(user: User, filters: { page?: number; limit?: number }) {
     const userId = new Types.ObjectId(user._id);
-
     const { data, total } = await this.paymentRepository.findPaymentsByUser(userId, filters);
-
     const page = filters.page || 1;
     const limit = filters.limit || 20;
 
@@ -553,24 +613,19 @@ export class PaymentService {
       success: true,
       message: 'Payment history retrieved',
       data: {
-        payments: data.map((payment) => ({
-          id: payment._id,
-          reference: payment.reference,
-          amount: payment.amount,
-          currency: payment.currency,
-          paymentMethod: payment.paymentMethod,
-          status: payment.status,
-          description: payment.description,
-          paidAt: payment.paidAt,
-          createdAt: payment.createdAt,
-          deliveryRequest: payment.deliveryRequest,
+        payments: data.map((p) => ({
+          id: p._id,
+          reference: p.reference,
+          amount: p.amount,
+          currency: p.currency,
+          paymentMethod: p.paymentMethod,
+          status: p.status,
+          description: p.description,
+          paidAt: p.paidAt,
+          createdAt: p.createdAt,
+          deliveryRequest: p.deliveryRequest,
         })),
-        pagination: {
-          total,
-          page,
-          limit,
-          pages: Math.ceil(total / limit),
-        },
+        pagination: { total, page, limit, pages: Math.ceil(total / limit) },
       },
     };
   }
@@ -583,23 +638,15 @@ export class PaymentService {
     reason: string,
   ) {
     const wallet = await this.paymentRepository.getOrCreateWallet(userId);
-
     const originalPayment = await this.paymentRepository.findPaymentByDelivery(deliveryId);
-    if (!originalPayment) {
-      throw new NotFoundException('Original payment not found');
-    }
+    if (!originalPayment) throw new NotFoundException('Original payment not found');
 
-    // Process refund to wallet
     const { wallet: updatedWallet, transaction } =
       await this.paymentRepository.processRefund(
-        wallet,
-        amount,
-        `Refund: ${reason}`,
-        originalPayment.reference,
+        wallet, amount, `Refund: ${reason}`, originalPayment.reference,
         { deliveryId: deliveryId.toString(), reason },
       );
 
-    // Create refund payment record
     const refundPayment = await this.paymentRepository.createPayment({
       reference: this.paymentRepository.generatePaymentReference(),
       user: userId,
@@ -615,31 +662,20 @@ export class PaymentService {
       description: `Refund for delivery`,
     });
 
-    // Update original payment
     await this.paymentRepository.updatePayment(originalPayment._id as Types.ObjectId, {
       refundedAmount: (originalPayment.refundedAmount || 0) + amount,
       refundedAt: new Date(),
-      status:
-        amount >= originalPayment.amount
-          ? DeliveryPaymentStatusEnum.REFUNDED
-          : DeliveryPaymentStatusEnum.PARTIALLY_REFUNDED,
+      status: amount >= originalPayment.amount
+        ? DeliveryPaymentStatusEnum.REFUNDED
+        : DeliveryPaymentStatusEnum.PARTIALLY_REFUNDED,
     });
 
-    // Emit refund event
     this.eventEmitter.emit('payment.refunded', {
-      userId,
-      deliveryId,
-      amount,
-      reason,
+      userId, deliveryId, amount, reason,
       transactionRef: transaction.transactionRef,
     });
 
-    return {
-      success: true,
-      refundPayment,
-      transaction,
-      newBalance: updatedWallet.depositBalance,
-    };
+    return { success: true, refundPayment, transaction, newBalance: updatedWallet.depositBalance };
   }
 
   // ============ Webhook Handlers (called by WebhookController) ============
@@ -669,10 +705,16 @@ export class PaymentService {
     // If this is a delivery payment, update delivery status and generate PINs
     if (payment.deliveryRequest) {
       const deliveryId = payment.deliveryRequest as Types.ObjectId;
+      const delivery = await this.paymentRepository.findDeliveryById(deliveryId);
 
-      // Generate PINs on payment confirmation
       const pickupPin = Math.floor(1000 + Math.random() * 9000).toString();
       const deliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
+
+      // Determine next status based on delivery type and current status
+      let newStatus = DeliveryStatusEnum.PAYMENT_CONFIRMED;
+      if (delivery?.deliveryType === 'scheduled') {
+        newStatus = DeliveryStatusEnum.SCHEDULED;
+      }
 
       await this.paymentRepository.deliveryModel.findByIdAndUpdate(deliveryId, {
         $set: {
@@ -680,9 +722,16 @@ export class PaymentService {
           payment: payment._id,
           pickupPin,
           deliveryPin,
-          status: DeliveryStatusEnum.PAYMENT_CONFIRMED,
+          status: newStatus,
         },
       });
+
+      // WS: broadcast payment confirmed to the user's app
+      this.gateway.emitDeliveryStatusUpdate(
+        deliveryId.toString(),
+        newStatus,
+        { paymentStatus: 'paid' },
+      );
 
       this.eventEmitter.emit('payment.completed', {
         paymentId: payment._id,
@@ -691,6 +740,10 @@ export class PaymentService {
         amount: data.amount,
         method: payment.paymentMethod,
       });
+
+      this.logger.log(
+        `Delivery ${deliveryId} payment confirmed via webhook → status: ${newStatus}`,
+      );
     }
   }
 
@@ -698,10 +751,36 @@ export class PaymentService {
     reference: string,
     data: { providerResponse?: string },
   ) {
+    const payment = await this.paymentRepository.findPaymentByReference(reference);
+    if (!payment) return;
+
     await this.paymentRepository.updatePaymentByReference(reference, {
       status: DeliveryPaymentStatusEnum.FAILED,
       providerResponse: data.providerResponse,
     });
+
+    // If delivery payment failed, revert delivery status
+    if (payment.deliveryRequest) {
+      const deliveryId = payment.deliveryRequest as Types.ObjectId;
+      const delivery = await this.paymentRepository.findDeliveryById(deliveryId);
+
+      if (delivery?.status === DeliveryStatusEnum.AWAITING_PAYMENT) {
+        // Revert to previous status
+        const revertStatus = delivery.deliveryType === 'quick'
+          ? DeliveryStatusEnum.RIDER_ARRIVED_PICKUP
+          : DeliveryStatusEnum.PENDING;
+
+        await this.paymentRepository.deliveryModel.findByIdAndUpdate(deliveryId, {
+          $set: { paymentStatus: DeliveryPaymentStatusEnum.FAILED, status: revertStatus },
+        });
+
+        this.gateway.emitDeliveryStatusUpdate(
+          deliveryId.toString(),
+          revertStatus,
+          { paymentStatus: 'failed' },
+        );
+      }
+    }
   }
 
   async handleWebhookTransferSuccess(
@@ -718,14 +797,12 @@ export class PaymentService {
       providerResponse: data.providerResponse,
     });
 
-    // If withdrawal, debit wallet
     if (payment.metadata?.type === 'withdrawal') {
       const userId = payment.user as Types.ObjectId;
       const wallet = await this.paymentRepository.findWalletByUser(userId);
       if (wallet) {
         await this.paymentRepository.processWalletPayment(
-          wallet,
-          payment.amount,
+          wallet, payment.amount,
           `Withdrawal to ${payment.metadata.bankName}`,
           TransactionCategory.WITHDRAWAL,
           { paymentId: payment._id?.toString() },
@@ -743,13 +820,10 @@ export class PaymentService {
       providerResponse: data.providerResponse,
     });
 
-    // TODO: Notify user that withdrawal failed
     const payment = await this.paymentRepository.findPaymentByReference(reference);
     if (payment) {
       this.eventEmitter.emit('withdrawal.failed', {
-        userId: payment.user,
-        amount: payment.amount,
-        reason: data.reason,
+        userId: payment.user, amount: payment.amount, reason: data.reason,
       });
     }
   }

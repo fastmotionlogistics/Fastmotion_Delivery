@@ -20,10 +20,12 @@ import {
   IssueRefundDto,
   DeliveryFilterDto,
 } from './dto';
+import { AdminJwtAuthGuard, PermissionGuard, RequirePermissions } from '../auth/guards';
+import { AdminPermissionEnum } from '@libs/database';
 
 @ApiTags('Admin - Delivery Management')
 @Controller('delivery')
-// @UseGuards(AdminJwtAuthGuard) // TODO: Add admin auth guard
+@UseGuards(AdminJwtAuthGuard, PermissionGuard)
 @ApiBearerAuth()
 export class DeliveryController {
   constructor(private readonly deliveryService: DeliveryService) {}

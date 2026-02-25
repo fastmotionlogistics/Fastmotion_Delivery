@@ -38,7 +38,7 @@ export class LocationDetails {
 // Embedded schema for parcel details
 @Schema({ _id: false })
 export class ParcelDetails {
-  @Prop({ type: String, required: true })
+  @Prop({ type: String, required: false })
   description: string;
 
   @Prop({ type: String, enum: ParcelSizeEnum, default: ParcelSizeEnum.SMALL })
@@ -58,6 +58,9 @@ export class ParcelDetails {
 
   @Prop({ type: Number, required: false })
   declaredValue?: number;
+
+  @Prop({ type: [String], default: [] })
+  specialHandling?: string[];
 }
 
 // Embedded schema for pricing details
@@ -80,6 +83,15 @@ export class PricingDetails {
 
   @Prop({ type: Number, default: 0 })
   surgePrice: number;
+
+  @Prop({ type: Number, default: 0 })
+  categoryAdditionalFee: number;
+
+  @Prop({ type: Number, default: 0 })
+  handlingFee: number;
+
+  @Prop({ type: Number, default: 0 })
+  sizeFee: number;
 
   @Prop({ type: Number, default: 0 })
   serviceFee: number;

@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { updateFCMDto } from '@libs/common';
 import { AccountUserRepository } from './repository';
-import { UpdateProfileDto, UpdateNotificationPreferencesDto } from './dto';
+import { UpdateProfileDto, UpdateNotificationPreferencesDto, CreateSavedAddressDto, UpdateSavedAddressDto } from './dto';
+import { Types } from 'mongoose';
 
 @Injectable()
 export class AccountService {
@@ -148,6 +149,65 @@ export class AccountService {
     return {
       success: true,
       message: 'FCM token updated successfully',
+    };
+  }
+
+  // ═══════════ SAVED ADDRESSES ═══════════
+
+  private static MAX_SAVED_ADDRESSES = 5;
+
+  async getSavedAddresses(userId: string) {
+    const addresses = await this.userRepository.savedAddressModel
+      .find({ userId: new Types.ObjectId(userId) })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return {
+      success: true,
+      message: 'Saved addresses retrieved',
+      data: addresses,
+    };
+  }
+
+  async createSavedAddress(userId: string, body: CreateSavedAddressDto) {
+    const count = await this.userRepository.savedAddressModel.countDocuments({
+      userId: new Types.ObjectId(userId),
+    });
+
+    if (count >= AccountService.MAX_SAVED_ADDRESSES) {
+      throw new BadRequestException(
+        `Maximum of ${AccountService.MAX_SAVED_ADDRESSES} saved addresses allowed. Please delete one first.`,
+      );
+    }
+
+    const address = await this.userRepository.savedAddressModel.create({
+      _id: new Types.ObjectId(),
+      userId: new Types.ObjectId(userId),
+      ...body,
+    });
+
+    return {
+      success: true,
+      message: 'Address saved',
+      data: address,
+    };
+  }
+
+  async deleteSavedAddress(userId: string, addressId: string) {
+    const address = await this.userRepository.savedAddressModel.findOne({
+      _id: addressId,
+      userId: new Types.ObjectId(userId),
+    });
+
+    if (!address) {
+      throw new NotFoundException('Saved address not found');
+    }
+
+    await this.userRepository.savedAddressModel.deleteOne({ _id: addressId });
+
+    return {
+      success: true,
+      message: 'Address deleted',
     };
   }
 

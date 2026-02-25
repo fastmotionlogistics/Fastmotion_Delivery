@@ -3,57 +3,14 @@ import {
   IsString,
   IsNotEmpty,
   IsOptional,
-  IsEmail,
-  IsEnum,
   IsStrongPassword,
-  Matches,
-  MaxLength,
   MinLength,
+  MaxLength,
 } from 'class-validator';
-import { VehicleTypeEnum } from '@libs/common';
 
-export class RegisterRiderDto {
-  @ApiProperty({ example: 'John' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(64)
-  firstName: string;
-
-  @ApiProperty({ example: 'Doe' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(64)
-  lastName: string;
-
-  @ApiProperty({ example: 'rider@example.com' })
-  @IsEmail()
-  @IsNotEmpty()
-  email: string;
-
-  @ApiProperty({ example: '+2348012345678' })
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^\+?[1-9]\d{1,14}$/, { message: 'Invalid phone number format' })
-  phone: string;
-
-  @ApiProperty({ example: 'Password@123' })
-  @IsStrongPassword()
-  @MinLength(8)
-  password: string;
-
-  @ApiProperty({ example: 'Password@123' })
-  @IsString()
-  @IsNotEmpty()
-  confirmPassword: string;
-
-  @ApiPropertyOptional({ enum: VehicleTypeEnum, example: VehicleTypeEnum.MOTORCYCLE })
-  @IsEnum(VehicleTypeEnum)
-  @IsOptional()
-  vehicleType?: VehicleTypeEnum;
-}
-
+// ── Login (email or phone — no signup for riders) ────────
 export class LoginRiderDto {
-  @ApiProperty({ example: 'rider@example.com' })
+  @ApiProperty({ example: 'rider@fastmotion.com', description: 'Email address or phone number' })
   @IsString()
   @IsNotEmpty()
   emailOrPhone: string;
@@ -63,14 +20,48 @@ export class LoginRiderDto {
   @IsNotEmpty()
   password: string;
 
-  @ApiPropertyOptional({ example: 'fcm_token_here' })
+  @ApiPropertyOptional({ example: 'fcm_token_here', description: 'Firebase Cloud Messaging token' })
   @IsString()
   @IsOptional()
   fcmToken?: string;
+
+  @ApiPropertyOptional({ example: 'a1b2c3d4-e5f6-7890', description: 'Unique device identifier for device binding' })
+  @IsString()
+  @IsOptional()
+  deviceId?: string;
+
+  @ApiPropertyOptional({ example: 'iPhone 15 Pro', description: 'Device model name for reference' })
+  @IsString()
+  @IsOptional()
+  deviceModel?: string;
 }
 
-export class VerifyOtpDto {
-  @ApiProperty({ example: 'rider@example.com' })
+// ── Bike Verification (post-login step) ──────────────────
+export class VerifyBikeDto {
+  @ApiProperty({ example: 'B-124', description: 'Bike identifier printed/tagged on the vehicle' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
+  bikeId: string;
+
+  @ApiPropertyOptional({ example: 'LAG-123-XY', description: 'Vehicle plate number (optional override)' })
+  @IsString()
+  @IsOptional()
+  @MaxLength(20)
+  vehiclePlateNumber?: string;
+}
+
+// ── Forgot Password ──────────────────────────────────────
+export class ForgotPasswordDto {
+  @ApiProperty({ example: 'rider@fastmotion.com', description: 'Email or phone to receive OTP' })
+  @IsString()
+  @IsNotEmpty()
+  emailOrPhone: string;
+}
+
+// ── Reset Password ───────────────────────────────────────
+export class ResetPasswordDto {
+  @ApiProperty({ example: 'rider@fastmotion.com' })
   @IsString()
   @IsNotEmpty()
   emailOrPhone: string;
@@ -80,32 +71,6 @@ export class VerifyOtpDto {
   @IsNotEmpty()
   @MinLength(4)
   @MaxLength(6)
-  otpCode: string;
-}
-
-export class ResendOtpDto {
-  @ApiProperty({ example: 'rider@example.com' })
-  @IsString()
-  @IsNotEmpty()
-  emailOrPhone: string;
-}
-
-export class ForgotPasswordDto {
-  @ApiProperty({ example: 'rider@example.com' })
-  @IsString()
-  @IsNotEmpty()
-  emailOrPhone: string;
-}
-
-export class ResetPasswordDto {
-  @ApiProperty({ example: 'rider@example.com' })
-  @IsString()
-  @IsNotEmpty()
-  emailOrPhone: string;
-
-  @ApiProperty({ example: '123456' })
-  @IsString()
-  @IsNotEmpty()
   otp: string;
 
   @ApiProperty({ example: 'NewPassword@123' })
@@ -119,6 +84,7 @@ export class ResetPasswordDto {
   confirmPassword: string;
 }
 
+// ── Logout ───────────────────────────────────────────────
 export class LogoutDto {
   @ApiPropertyOptional({ example: 'refresh_token_here' })
   @IsString()

@@ -9,8 +9,11 @@ import { DatabaseModule } from '@libs/database';
 import { FirebaseModule } from 'nestjs-firebase';
 
 // FastMotion Admin Modules
+import { AuthModule } from './auth/auth.module';
 import { PricingModule } from './pricing/pricing.module';
 import { DeliveryModule } from './delivery/delivery.module';
+import { RiderManagementModule } from './rider-management/rider-management.module';
+import { CatalogModule } from './catalog/catalog.module';
 
 @Module({
   imports: [
@@ -23,7 +26,7 @@ import { DeliveryModule } from './delivery/delivery.module';
         return {
           secret: configService.getOrThrow('JWT_ASECRET'),
           signOptions: {
-            expiresIn: `${configService.getOrThrow('JWT_EXPIRATION')}s`,
+            expiresIn: `${configService.getOrThrow('JWT_EXPIRATION')}`,
           },
         };
       },
@@ -57,8 +60,11 @@ import { DeliveryModule } from './delivery/delivery.module';
     ScheduleModule.forRoot(),
 
     // FastMotion Admin Modules
+    AuthModule,
     PricingModule,
     DeliveryModule,
+    RiderManagementModule,
+    CatalogModule,
   ],
   providers: [ShutdownService],
 })

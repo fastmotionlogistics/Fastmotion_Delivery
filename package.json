@@ -16,6 +16,8 @@
     "dstart": "nest start delivery-api --watch",
     "start:admin": "nest start admin-api",
     "astart": "nest start admin-api --watch",
+    "seed:admin": "node seed-admin.js",
+    "seed:categories": "node seed-categories.js",
     "start:dev:core": "nest start core-service --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod:user": "node dist/apps/user-api/main.js",

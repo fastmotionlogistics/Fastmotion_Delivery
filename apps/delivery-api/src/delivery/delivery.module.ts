@@ -11,6 +11,7 @@ import {
   UserSchema,
 } from '@libs/database';
 import { GatewayModule } from '@libs/common/modules/gateway';
+import { NotificationModule } from '@libs/common/modules/notification';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { GatewayModule } from '@libs/common/modules/gateway';
       { name: User.name, schema: UserSchema },
     ]),
     GatewayModule,
+    NotificationModule,
   ],
   controllers: [DeliveryController],
   providers: [DeliveryService],

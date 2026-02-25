@@ -21,10 +21,16 @@ import {
   CreateTimePricingDto,
   UpdateTimePricingDto,
 } from './dto';
+import { AdminPermissionEnum } from '@libs/database';
+import {
+  AdminJwtAuthGuard,
+  PermissionGuard,
+  RequirePermissions,
+} from '../auth/guards';
 
 @ApiTags('Admin - Pricing Management')
 @Controller('pricing')
-// @UseGuards(AdminJwtAuthGuard) // TODO: Add admin auth guard
+@UseGuards(AdminJwtAuthGuard, PermissionGuard)
 @ApiBearerAuth()
 export class PricingController {
   constructor(private readonly pricingService: PricingService) {}
@@ -32,18 +38,21 @@ export class PricingController {
   // ============ Pricing Config ============
 
   @ApiOperation({ summary: 'Get active pricing configuration' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
   @Get('config')
   async getActivePricingConfig() {
     return await this.pricingService.getActivePricingConfig();
   }
 
   @ApiOperation({ summary: 'Get all pricing configurations' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
   @Get('config/all')
   async getAllPricingConfigs() {
     return await this.pricingService.getAllPricingConfigs();
   }
 
   @ApiOperation({ summary: 'Create pricing configuration' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreatePricingConfigDto })
   @Post('config')
   async createPricingConfig(@Body() body: CreatePricingConfigDto) {
@@ -51,6 +60,7 @@ export class PricingController {
   }
 
   @ApiOperation({ summary: 'Update pricing configuration' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdatePricingConfigDto })
   @Put('config/:id')
   async updatePricingConfig(
@@ -63,19 +73,22 @@ export class PricingController {
   // ============ Location Zones ============
 
   @ApiOperation({ summary: 'Get all location zones' })
-  @ApiQuery({ name: 'status', required: false })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
+  @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
   @Get('zones')
   async getAllZones(@Query('status') status?: string) {
     return await this.pricingService.getAllZones(status);
   }
 
   @ApiOperation({ summary: 'Get zone by ID' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
   @Get('zones/:id')
   async getZoneById(@Param('id') id: string) {
     return await this.pricingService.getZoneById(id);
   }
 
   @ApiOperation({ summary: 'Create location zone' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreateLocationZoneDto })
   @Post('zones')
   async createZone(@Body() body: CreateLocationZoneDto) {
@@ -83,13 +96,15 @@ export class PricingController {
   }
 
   @ApiOperation({ summary: 'Update location zone' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdateLocationZoneDto })
   @Put('zones/:id')
   async updateZone(@Param('id') id: string, @Body() body: UpdateLocationZoneDto) {
     return await this.pricingService.updateZone(id, body);
   }
 
-  @ApiOperation({ summary: 'Delete location zone' })
+  @ApiOperation({ summary: 'Delete (deactivate) location zone' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @Delete('zones/:id')
   async deleteZone(@Param('id') id: string) {
     return await this.pricingService.deleteZone(id);
@@ -98,19 +113,22 @@ export class PricingController {
   // ============ Weight Pricing ============
 
   @ApiOperation({ summary: 'Get all weight pricing tiers' })
-  @ApiQuery({ name: 'status', required: false })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
+  @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
   @Get('weight')
   async getAllWeightPricing(@Query('status') status?: string) {
     return await this.pricingService.getAllWeightPricing(status);
   }
 
   @ApiOperation({ summary: 'Get weight pricing by ID' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
   @Get('weight/:id')
   async getWeightPricingById(@Param('id') id: string) {
     return await this.pricingService.getWeightPricingById(id);
   }
 
   @ApiOperation({ summary: 'Create weight pricing tier' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreateWeightPricingDto })
   @Post('weight')
   async createWeightPricing(@Body() body: CreateWeightPricingDto) {
@@ -118,6 +136,7 @@ export class PricingController {
   }
 
   @ApiOperation({ summary: 'Update weight pricing tier' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdateWeightPricingDto })
   @Put('weight/:id')
   async updateWeightPricing(
@@ -127,7 +146,8 @@ export class PricingController {
     return await this.pricingService.updateWeightPricing(id, body);
   }
 
-  @ApiOperation({ summary: 'Delete weight pricing tier' })
+  @ApiOperation({ summary: 'Delete (deactivate) weight pricing tier' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @Delete('weight/:id')
   async deleteWeightPricing(@Param('id') id: string) {
     return await this.pricingService.deleteWeightPricing(id);
@@ -136,19 +156,22 @@ export class PricingController {
   // ============ Time Pricing ============
 
   @ApiOperation({ summary: 'Get all time pricing slots' })
-  @ApiQuery({ name: 'status', required: false })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
+  @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
   @Get('time')
   async getAllTimePricing(@Query('status') status?: string) {
     return await this.pricingService.getAllTimePricing(status);
   }
 
   @ApiOperation({ summary: 'Get time pricing by ID' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
   @Get('time/:id')
   async getTimePricingById(@Param('id') id: string) {
     return await this.pricingService.getTimePricingById(id);
   }
 
   @ApiOperation({ summary: 'Create time pricing slot' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreateTimePricingDto })
   @Post('time')
   async createTimePricing(@Body() body: CreateTimePricingDto) {
@@ -156,6 +179,7 @@ export class PricingController {
   }
 
   @ApiOperation({ summary: 'Update time pricing slot' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdateTimePricingDto })
   @Put('time/:id')
   async updateTimePricing(
@@ -165,7 +189,8 @@ export class PricingController {
     return await this.pricingService.updateTimePricing(id, body);
   }
 
-  @ApiOperation({ summary: 'Delete time pricing slot' })
+  @ApiOperation({ summary: 'Delete (deactivate) time pricing slot' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @Delete('time/:id')
   async deleteTimePricing(@Param('id') id: string) {
     return await this.pricingService.deleteTimePricing(id);
@@ -173,7 +198,8 @@ export class PricingController {
 
   // ============ Price Calculator ============
 
-  @ApiOperation({ summary: 'Calculate delivery price (preview)' })
+  @ApiOperation({ summary: 'Calculate delivery price (preview for admin)' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
   @Post('calculate')
   async calculatePrice(
     @Body()
@@ -182,7 +208,8 @@ export class PricingController {
       pickupLongitude: string;
       dropoffLatitude: string;
       dropoffLongitude: string;
-      weightKg: number;
+      size?: string;
+      category?: string;
       deliveryType: string;
       scheduledTime?: string;
     },

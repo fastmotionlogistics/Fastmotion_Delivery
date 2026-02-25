@@ -14,6 +14,7 @@ import {
   Dispute,
   DisputeSchema,
 } from '@libs/database';
+import { NotificationModule } from '@libs/common/modules/notification';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import {
       { name: Payment.name, schema: PaymentSchema },
       { name: Dispute.name, schema: DisputeSchema },
     ]),
+    NotificationModule,
   ],
   controllers: [DeliveryController],
   providers: [DeliveryService],

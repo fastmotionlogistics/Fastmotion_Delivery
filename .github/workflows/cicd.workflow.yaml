@@ -19,7 +19,7 @@ jobs:
         run: npm ci --legacy-peer-deps
 
       - name: Build NestJS app
-        run: npm run build:shop && npm run build:delivery && npm run build:admin && npm run build:bakery
+        run: npm run build:user && npm run build:delivery && npm run build:admin
 
       - name: Create deployment archive
         run: |
@@ -60,12 +60,11 @@ jobs:
           port: 22
           key: ${{ secrets.SSH_KEY}}
           script: |
-            cd /var/www/apps/bbservice
+            cd /var/www/apps/fastmotionservice
             tar -xzf /tmp/deploy.tar.gz
             rm /tmp/deploy.tar.gz
-            pm2 restart shop || pm2 start dist/apps/shop-api/main.js --name shop
+            pm2 restart user || pm2 start dist/apps/user-api/main.js --name user
             pm2 restart delivery || pm2 start dist/apps/delivery-api/main.js --name delivery
             pm2 restart admin || pm2 start dist/apps/admin-api/main.js --name admin
-            pm2 restart bakery || pm2 start dist/apps/bakery-api/main.js --name bakery
             pm2 save
             pm2 startup systemd -u root --hp /root || true

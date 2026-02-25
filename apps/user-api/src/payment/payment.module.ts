@@ -16,6 +16,7 @@ import {
   DeliveryRequest,
   DeliveryRequestSchema,
 } from '@libs/database';
+import { GatewayModule } from '@libs/common/modules/gateway';
 
 @Module({
   imports: [
@@ -26,6 +27,8 @@ import {
       { name: User.name, schema: UserSchema },
       { name: DeliveryRequest.name, schema: DeliveryRequestSchema },
     ]),
+    GatewayModule,
+    // MonnifyModule is @Global() so no import needed
   ],
   controllers: [PaymentController, WebhookController],
   providers: [PaymentService, PaymentRepository],

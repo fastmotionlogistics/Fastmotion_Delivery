@@ -85,6 +85,45 @@ export class PricingConfig extends AbstractDocument {
   @Prop({ type: Number, default: 0.5 })
   cancellationFeeAfterPickupPercentage: number;
 
+  // ── Size-based pricing ──
+  @ApiProperty({
+    example: { small: 0, medium: 200, large: 500, extra_large: 1000 },
+    description: 'Additional flat fee per parcel size on top of base delivery fee',
+  })
+  @Prop({
+    type: Object,
+    default: { small: 0, medium: 200, large: 500, extra_large: 1000 },
+  })
+  sizeFees: Record<string, number>;
+
+  @ApiProperty({
+    example: { small: 1.0, medium: 1.0, large: 1.2, extra_large: 1.5 },
+    description: 'Multiplier per parcel size applied to the subtotal',
+  })
+  @Prop({
+    type: Object,
+    default: { small: 1.0, medium: 1.0, large: 1.2, extra_large: 1.5 },
+  })
+  sizeMultipliers: Record<string, number>;
+
+  // ── Category-based pricing ──
+  @ApiProperty({
+    example: { documents: 1.0, clothes: 1.0, food: 1.1, electronics: 1.3, fragile: 1.5, other: 1.0 },
+    description: 'Multiplier per parcel category',
+  })
+  @Prop({
+    type: Object,
+    default: {
+      documents: 1.0,
+      clothes: 1.0,
+      food: 1.1,
+      electronics: 1.3,
+      fragile: 1.5,
+      other: 1.0,
+    },
+  })
+  categoryMultipliers: Record<string, number>;
+
   // Rescheduling fees
   @ApiProperty({ example: 100, description: 'Fee for rescheduling' })
   @Prop({ type: Number, default: 0 })

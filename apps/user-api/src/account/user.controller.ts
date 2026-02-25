@@ -4,6 +4,8 @@ import {
   Post,
   Body,
   Put,
+  Delete,
+  Param,
   UseGuards,
   UseInterceptors,
   ClassSerializerInterceptor,
@@ -16,7 +18,7 @@ import { User } from '@libs/database';
 import { CurrentUser, JwtAuthGuard, SetRolesMetaData } from '@libs/auth';
 import { FileUploadOptions, Role, updateFCMDto, UploadFileService } from '@libs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { UpdateProfileDto, UpdateNotificationPreferencesDto } from './dto';
+import { UpdateProfileDto, UpdateNotificationPreferencesDto, CreateSavedAddressDto } from './dto';
 
 @ApiTags('Account')
 @Controller('account')
@@ -94,6 +96,27 @@ export class AccountController {
       file.mimetype,
       options,
     );
+  }
+
+  // ═══════════ SAVED ADDRESSES ═══════════
+
+  @ApiOperation({ summary: 'Get saved addresses' })
+  @Get('addresses')
+  async getSavedAddresses(@CurrentUser() user: User) {
+    return await this.accountService.getSavedAddresses(user._id.toString());
+  }
+
+  @ApiOperation({ summary: 'Add a saved address (max 5)' })
+  @ApiBody({ type: CreateSavedAddressDto })
+  @Post('addresses')
+  async createSavedAddress(@CurrentUser() user: User, @Body() body: CreateSavedAddressDto) {
+    return await this.accountService.createSavedAddress(user._id.toString(), body);
+  }
+
+  @ApiOperation({ summary: 'Delete a saved address' })
+  @Delete('addresses/:id')
+  async deleteSavedAddress(@CurrentUser() user: User, @Param('id') id: string) {
+    return await this.accountService.deleteSavedAddress(user._id.toString(), id);
   }
 
   @ApiOperation({ summary: 'Delete user account' })

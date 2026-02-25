@@ -2,16 +2,13 @@ import {
   Body,
   Controller,
   Post,
-  Ip,
   UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { ApiBearerAuth, ApiBody, ApiTags, ApiOperation } from '@nestjs/swagger';
 import {
-  RegisterRiderDto,
   LoginRiderDto,
-  VerifyOtpDto,
-  ResendOtpDto,
+  VerifyBikeDto,
   ForgotPasswordDto,
   ResetPasswordDto,
   LogoutDto,
@@ -25,43 +22,33 @@ import { CurrentRider } from './decorators/current-rider.decorator';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @ApiOperation({ summary: 'Register a new rider' })
-  @ApiBody({ type: RegisterRiderDto })
-  @Post('register')
-  async register(@Body() body: RegisterRiderDto) {
-    return await this.authService.register(body);
-  }
+  // NOTE: No registration endpoint — riders are created by admin only
 
-  @ApiOperation({ summary: 'Login rider' })
+  @ApiOperation({ summary: 'Login rider (email or phone + password)' })
   @ApiBody({ type: LoginRiderDto })
   @UseGuards(RiderLocalAuthGuard)
   @Post('login')
-  async login(@CurrentRider() rider: Rider, @Body() body: LoginRiderDto): Promise<any> {
+  async login(@CurrentRider() rider: Rider, @Body() body: LoginRiderDto) {
     return await this.authService.login(rider, body);
   }
 
-  @ApiOperation({ summary: 'Verify email OTP' })
-  @ApiBody({ type: VerifyOtpDto })
-  @Post('verify-otp')
-  async verifyOtp(@Body() body: VerifyOtpDto, @Ip() ipAddress: string) {
-    return await this.authService.verifyOtp(body, ipAddress);
+  @ApiOperation({ summary: 'Verify & bind bike ID (post-login security step)' })
+  @ApiBody({ type: VerifyBikeDto })
+  @UseGuards(RiderJwtAuthGuard)
+  @ApiBearerAuth()
+  @Post('verify-bike')
+  async verifyBike(@CurrentRider() rider: Rider, @Body() body: VerifyBikeDto) {
+    return await this.authService.verifyBike(rider, body);
   }
 
-  @ApiOperation({ summary: 'Resend OTP' })
-  @ApiBody({ type: ResendOtpDto })
-  @Post('resend-otp')
-  async resendOtp(@Body() body: ResendOtpDto) {
-    return await this.authService.resendOtp(body);
-  }
-
-  @ApiOperation({ summary: 'Forgot password' })
+  @ApiOperation({ summary: 'Forgot password — send OTP' })
   @ApiBody({ type: ForgotPasswordDto })
   @Post('forgot-password')
   async forgotPassword(@Body() body: ForgotPasswordDto) {
     return await this.authService.forgotPassword(body);
   }
 
-  @ApiOperation({ summary: 'Reset password' })
+  @ApiOperation({ summary: 'Reset password with OTP' })
   @ApiBody({ type: ResetPasswordDto })
   @Post('reset-password')
   async resetPassword(@Body() body: ResetPasswordDto) {

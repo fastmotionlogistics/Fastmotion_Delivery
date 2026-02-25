@@ -1,17 +1,8 @@
-import {
-  Injectable,
-  BadRequestException,
-  NotFoundException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { User } from '@libs/database';
-import {
-  DeliveryStatusEnum,
-  DeliveryTypeEnum,
-  DeliveryPaymentStatusEnum,
-} from '@libs/common';
+import { DeliveryStatusEnum, DeliveryTypeEnum, DeliveryPaymentStatusEnum } from '@libs/common';
 import { DeliveryRepository } from './repository';
 import {
   CreateDeliveryRequestDto,
@@ -22,6 +13,8 @@ import {
   ConfirmReschedulePaymentDto,
 } from './dto';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
+import { NotificationService } from '@libs/common/modules/notification';
+import { NotificationRecipientType } from '@libs/database';
 
 @Injectable()
 export class DeliveryService {
@@ -29,7 +22,30 @@ export class DeliveryService {
     private readonly deliveryRepository: DeliveryRepository,
     private readonly eventEmitter: EventEmitter2,
     private readonly gateway: DeliveryGateway,
+    private readonly notificationService: NotificationService,
   ) {}
+
+  // Helper: push notify the delivery's rider
+  private async pushNotifyRider(
+    riderId: Types.ObjectId | string,
+    title: string,
+    body: string,
+    data?: Record<string, any>,
+  ) {
+    try {
+      const rider = await this.deliveryRepository.riderModel.findById(riderId).select('fcmToken').lean();
+      if (rider?.fcmToken) {
+        await this.notificationService.send({
+          recipientId: riderId instanceof Types.ObjectId ? riderId : new Types.ObjectId(riderId),
+          recipientType: NotificationRecipientType.RIDER,
+          title,
+          body,
+          token: rider.fcmToken,
+          data,
+        });
+      }
+    } catch (_) {}
+  }
 
   async createDeliveryRequest(user: User, body: CreateDeliveryRequestDto) {
     // Calculate pricing
@@ -47,12 +63,25 @@ export class DeliveryService {
     }
 
     // PRD 7.2: Scheduled deliveries require upfront payment reference
-    // Quick deliveries pay at pickup
-    const initialStatus = isQuickDelivery
-      ? DeliveryStatusEnum.SEARCHING_RIDER
-      : body.paymentReference
+    // Quick deliveries:
+    //   - paymentMethod === 'wallet' and paymentReference provided → paid upfront → SEARCHING_RIDER
+    //   - paymentMethod === 'pay_at_pickup' → rider finds parcel, user pays on arrival → SEARCHING_RIDER
+    //   - otherwise (card/bank pending) → PENDING until payment webhook confirms
+    let initialStatus: DeliveryStatusEnum;
+    if (!isQuickDelivery) {
+      initialStatus = body.paymentReference
         ? DeliveryStatusEnum.SCHEDULED
         : DeliveryStatusEnum.PENDING;
+    } else if (body.paymentMethod === 'pay_at_pickup') {
+      // Pay at pickup: search for riders immediately, user pays when rider arrives
+      initialStatus = DeliveryStatusEnum.SEARCHING_RIDER;
+    } else if (body.paymentReference) {
+      // Already paid (wallet) — search for riders immediately
+      initialStatus = DeliveryStatusEnum.SEARCHING_RIDER;
+    } else {
+      // Card/bank: payment not yet confirmed — wait for webhook
+      initialStatus = DeliveryStatusEnum.PENDING;
+    }
 
     // Create delivery request
     const delivery = await this.deliveryRepository.create({
@@ -63,51 +92,50 @@ export class DeliveryService {
       pickupLocation: body.pickupLocation,
       dropoffLocation: body.dropoffLocation,
       parcelDetails: {
-        description: body.parcelDetails.description,
+        description: body?.parcelDetails?.description ?? '',
         size: body.parcelDetails.size,
         weight: body.parcelDetails.weight,
         quantity: body.parcelDetails.quantity || 1,
         isFragile: body.parcelDetails.isFragile || false,
         category: body.parcelDetails.category,
         declaredValue: body.parcelDetails.declaredValue,
+        specialHandling: body.parcelDetails.specialHandling || [],
       },
       estimatedDistance: pricing.estimatedDistance,
       estimatedDuration: pricing.estimatedDuration,
       pricing: pricing.breakdown,
-      paymentStatus: (isQuickDelivery || !body.paymentReference)
-        ? DeliveryPaymentStatusEnum.PENDING
-        : DeliveryPaymentStatusEnum.PAID,
-      scheduledPickupTime: body.scheduledPickupTime
-        ? new Date(body.scheduledPickupTime)
-        : undefined,
+      paymentStatus:
+        isQuickDelivery || !body.paymentReference ? DeliveryPaymentStatusEnum.PENDING : DeliveryPaymentStatusEnum.PAID,
+      scheduledPickupTime: body.scheduledPickupTime ? new Date(body.scheduledPickupTime) : undefined,
       paymentRequiredAtPickup: isQuickDelivery,
       canReschedule: true,
       pickupZone: pricing.pickupZone?._id,
       dropoffZone: pricing.dropoffZone?._id,
       isInterZoneDelivery: pricing.isInterZone,
-      weightPricingApplied: pricing.weightPricing?._id,
       timePricingApplied: pricing.timePricing?._id,
     });
 
-    // Emit event for rider matching (quick delivery) or notification (scheduled)
-    if (isQuickDelivery) {
+    // Emit event for rider matching ONLY when status allows it
+    if (isQuickDelivery && initialStatus === DeliveryStatusEnum.SEARCHING_RIDER) {
+      // Already paid (wallet) or pay-at-pickup → search for riders now
       this.eventEmitter.emit('delivery.created.quick', {
         deliveryId: delivery._id,
         pickupLocation: body.pickupLocation,
       });
-    } else {
+    } else if (!isQuickDelivery) {
       this.eventEmitter.emit('delivery.created.scheduled', {
         deliveryId: delivery._id,
         scheduledTime: body.scheduledPickupTime,
       });
     }
+    // For quick + card/bank (PENDING status): rider matching happens after
+    // payment.completed event is emitted from the payment webhook handler
 
     // WS: broadcast new delivery status
-    this.gateway.emitDeliveryStatusUpdate(
-      delivery._id.toString(),
-      initialStatus,
-      { trackingNumber, deliveryType: body.deliveryType },
-    );
+    this.gateway.emitDeliveryStatusUpdate(delivery._id.toString(), initialStatus, {
+      trackingNumber,
+      deliveryType: body.deliveryType,
+    });
 
     return {
       success: true,
@@ -128,7 +156,9 @@ export class DeliveryService {
     };
   }
 
+
   async getDeliveryEstimate(user: User, body: CreateDeliveryRequestDto) {
+    // console.log(user, '=====the user====');
     const pricing = await this.calculatePricing(body);
 
     return {
@@ -141,6 +171,11 @@ export class DeliveryService {
           basePrice: pricing.breakdown.basePrice,
           distancePrice: pricing.breakdown.distancePrice,
           weightPrice: pricing.breakdown.weightPrice,
+          sizeFee: pricing.breakdown.sizeFee,
+          categoryAdditionalFee: pricing.breakdown.categoryAdditionalFee || 0,
+          handlingFee: pricing.breakdown.handlingFee || 0,
+          sizeMultiplierPrice: pricing.breakdown.sizeMultiplierPrice,
+          categoryMultiplierPrice: pricing.breakdown.categoryMultiplierPrice,
           timeMultiplierPrice: pricing.breakdown.timeMultiplierPrice,
           zoneMultiplierPrice: pricing.breakdown.zoneMultiplierPrice,
           serviceFee: pricing.breakdown.serviceFee,
@@ -153,6 +188,8 @@ export class DeliveryService {
           zone: pricing.breakdown.zoneMultiplier,
           weight: pricing.breakdown.weightMultiplier,
           time: pricing.breakdown.timeMultiplier,
+          size: pricing.breakdown.sizeMultiplier,
+          category: pricing.breakdown.categoryMultiplier,
           deliveryType: pricing.breakdown.deliveryTypeMultiplier,
         },
         couponApplied: pricing.coupon
@@ -165,14 +202,16 @@ export class DeliveryService {
     };
   }
 
-  async getMyDeliveries(
-    user: User,
-    filters: { status?: string; page?: number; limit?: number },
-  ) {
-    const { data, total } = await this.deliveryRepository.findByCustomer(
-      user._id,
-      filters,
-    );
+  async getMyDeliveries(user: User, filters: {
+    status?: string;
+    deliveryType?: string;
+    search?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const { data, total } = await this.deliveryRepository.findByCustomer(user._id, filters);
 
     return {
       success: true,
@@ -188,11 +227,7 @@ export class DeliveryService {
   }
 
   async getDeliveryById(user: User, id: string) {
-    const delivery = await this.deliveryRepository.findByIdWithRelations(id, [
-      'rider',
-      'rating',
-      'dispute',
-    ]);
+    const delivery = await this.deliveryRepository.findByIdWithRelations(id, ['rider', 'rating', 'dispute']);
 
     if (!delivery) {
       throw new NotFoundException('Delivery not found');
@@ -206,6 +241,89 @@ export class DeliveryService {
       success: true,
       message: 'Delivery retrieved',
       data: delivery,
+    };
+  }
+
+  async trackByTrackingNumber(user: User, trackingNumber: string) {
+    // Normalise to uppercase and trim
+    const normalised = trackingNumber.trim().toUpperCase();
+
+    const delivery = await this.deliveryRepository.findByTrackingNumber(normalised);
+    if (!delivery) {
+      throw new NotFoundException('No delivery found with this tracking number');
+    }
+
+    // Only the customer who created the delivery may track it
+    if (delivery.customer.toString() !== user._id.toString()) {
+      throw new ForbiddenException('You do not have access to this delivery');
+    }
+
+    // Hydrate rider info if assigned
+    let rider = null;
+    let riderLocation = null;
+    let estimatedArrival = null;
+
+    if (delivery.rider) {
+      const riderInfo = await this.deliveryRepository.findRiderPublicInfo(
+        delivery.rider as unknown as Types.ObjectId,
+      );
+      if (riderInfo) {
+        rider = {
+          firstName: riderInfo.firstName,
+          lastName: riderInfo.lastName,
+          profilePhoto: riderInfo.profilePhoto,
+          vehicleType: riderInfo.vehicleType,
+          rating: riderInfo.averageRating,
+        };
+
+        if (riderInfo.currentLatitude && riderInfo.currentLongitude) {
+          riderLocation = {
+            latitude: riderInfo.currentLatitude,
+            longitude: riderInfo.currentLongitude,
+          };
+
+          const targetLocation =
+            delivery.status === DeliveryStatusEnum.IN_TRANSIT
+              ? delivery.dropoffLocation
+              : delivery.pickupLocation;
+
+          const dist = this.deliveryRepository.calculateDistance(
+            parseFloat(riderInfo.currentLatitude),
+            parseFloat(riderInfo.currentLongitude),
+            parseFloat(targetLocation.latitude),
+            parseFloat(targetLocation.longitude),
+          );
+          estimatedArrival = Math.ceil(dist * 2); // rough minutes
+        }
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Delivery found',
+      data: {
+        _id: delivery._id,
+        trackingNumber: delivery.trackingNumber,
+        status: delivery.status,
+        deliveryType: delivery.deliveryType,
+        pickupLocation: delivery.pickupLocation,
+        dropoffLocation: delivery.dropoffLocation,
+        parcelDetails: delivery.parcelDetails,
+        estimatedDistance: delivery.estimatedDistance,
+        estimatedDuration: delivery.estimatedDuration,
+        pricing: delivery.pricing,
+        rider,
+        riderLocation,
+        estimatedArrival,
+        statusHistory: delivery.statusHistory,
+        createdAt: delivery.createdAt,
+        riderAcceptedAt: delivery.riderAcceptedAt,
+        arrivedAtPickupAt: delivery.arrivedAtPickupAt,
+        pickedUpAt: delivery.pickedUpAt,
+        arrivedAtDropoffAt: delivery.arrivedAtDropoffAt,
+        deliveredAt: delivery.deliveredAt,
+        scheduledPickupTime: delivery.scheduledPickupTime,
+      },
     };
   }
 
@@ -225,9 +343,7 @@ export class DeliveryService {
     let estimatedArrival = null;
 
     if (delivery.rider) {
-      const rider = await this.deliveryRepository.findRiderPublicInfo(
-        delivery.rider as unknown as Types.ObjectId,
-      );
+      const rider = await this.deliveryRepository.findRiderPublicInfo(delivery.rider as unknown as Types.ObjectId);
       if (rider && rider.currentLatitude && rider.currentLongitude) {
         riderLocation = {
           latitude: rider.currentLatitude,
@@ -236,9 +352,7 @@ export class DeliveryService {
 
         // Calculate ETA based on current position
         const targetLocation =
-          delivery.status === DeliveryStatusEnum.IN_TRANSIT
-            ? delivery.dropoffLocation
-            : delivery.pickupLocation;
+          delivery.status === DeliveryStatusEnum.IN_TRANSIT ? delivery.dropoffLocation : delivery.pickupLocation;
 
         const distance = this.deliveryRepository.calculateDistance(
           parseFloat(rider.currentLatitude),
@@ -289,14 +403,16 @@ export class DeliveryService {
       throw new BadRequestException('Payment must be confirmed before accessing pickup PIN');
     }
 
-    // PIN is only available when rider has arrived
-    const validStatuses = [
-      DeliveryStatusEnum.RIDER_ARRIVED_PICKUP,
-      DeliveryStatusEnum.PAYMENT_CONFIRMED,
-      DeliveryStatusEnum.PICKUP_IN_PROGRESS,
+    // PIN is available from payment_confirmed onwards (until delivery is complete)
+    const invalidStatuses = [
+      DeliveryStatusEnum.PENDING,
+      DeliveryStatusEnum.SEARCHING_RIDER,
+      DeliveryStatusEnum.RIDER_ACCEPTED,
+      DeliveryStatusEnum.RIDER_ASSIGNED,
+      DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP,
     ];
 
-    if (!validStatuses.includes(delivery.status as DeliveryStatusEnum)) {
+    if (invalidStatuses.includes(delivery.status as DeliveryStatusEnum)) {
       throw new BadRequestException('Pickup PIN is not available at this stage');
     }
 
@@ -368,8 +484,7 @@ export class DeliveryService {
 
     if (newTimePricing) {
       // Recalculate with new time multiplier
-      const baseWithoutTime =
-        currentPrice / (delivery.pricing.timeMultiplier || 1);
+      const baseWithoutTime = currentPrice / (delivery.pricing.timeMultiplier || 1);
       newPrice = Math.round(baseWithoutTime * newTimePricing.priceMultiplier);
       priceDifference = newPrice - currentPrice;
     }
@@ -454,10 +569,7 @@ export class DeliveryService {
     if (delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID) {
       const totalPaid = delivery.pricing.totalPrice;
 
-      if (
-        delivery.status === DeliveryStatusEnum.PENDING ||
-        delivery.status === DeliveryStatusEnum.SEARCHING_RIDER
-      ) {
+      if (delivery.status === DeliveryStatusEnum.PENDING || delivery.status === DeliveryStatusEnum.SEARCHING_RIDER) {
         // Before rider accepts - minimal or no fee
         cancellationFee = pricingConfig?.cancellationFeeBeforeAccept || 0;
       } else if (
@@ -509,6 +621,14 @@ export class DeliveryService {
         cancelledBy: 'customer',
         reason: body.reason,
       });
+
+      // Push notification to rider
+      await this.pushNotifyRider(
+        delivery.rider,
+        'Delivery Cancelled',
+        `Customer cancelled delivery ${delivery.trackingNumber}. Reason: ${body.reason}`,
+        { type: 'delivery_cancelled', deliveryId: id },
+      );
     }
 
     return {
@@ -523,10 +643,7 @@ export class DeliveryService {
   }
 
   async getDeliveryHistory(user: User, filters: { page?: number; limit?: number }) {
-    const { data, total } = await this.deliveryRepository.findCompletedByCustomer(
-      user._id,
-      filters,
-    );
+    const { data, total } = await this.deliveryRepository.findCompletedByCustomer(user._id, filters);
 
     return {
       success: true,
@@ -739,9 +856,7 @@ export class DeliveryService {
       throw new BadRequestException('No rider assigned to this delivery');
     }
 
-    const rider = await this.deliveryRepository.findRiderPublicInfo(
-      delivery.rider as unknown as Types.ObjectId,
-    );
+    const rider = await this.deliveryRepository.findRiderPublicInfo(delivery.rider as unknown as Types.ObjectId);
 
     if (!rider) {
       throw new NotFoundException('Rider information not found');
@@ -751,9 +866,7 @@ export class DeliveryService {
     let estimatedArrival = null;
     if (rider.currentLatitude && rider.currentLongitude) {
       const targetLocation =
-        delivery.status === DeliveryStatusEnum.IN_TRANSIT
-          ? delivery.dropoffLocation
-          : delivery.pickupLocation;
+        delivery.status === DeliveryStatusEnum.IN_TRANSIT ? delivery.dropoffLocation : delivery.pickupLocation;
 
       const distance = this.deliveryRepository.calculateDistance(
         parseFloat(rider.currentLatitude),
@@ -813,19 +926,14 @@ export class DeliveryService {
       DeliveryStatusEnum.CANCELLED,
     ];
 
-    const canReschedule = !nonReschedulableStatuses.includes(
-      delivery.status as DeliveryStatusEnum,
-    );
+    const canReschedule = !nonReschedulableStatuses.includes(delivery.status as DeliveryStatusEnum);
 
     let reason = null;
     if (!canReschedule) {
       if (delivery.status === DeliveryStatusEnum.RIDER_ARRIVED_PICKUP) {
         reason = 'Rider has arrived at pickup location';
       } else if (
-        [
-          DeliveryStatusEnum.PICKED_UP,
-          DeliveryStatusEnum.IN_TRANSIT,
-        ].includes(delivery.status as DeliveryStatusEnum)
+        [DeliveryStatusEnum.PICKED_UP, DeliveryStatusEnum.IN_TRANSIT].includes(delivery.status as DeliveryStatusEnum)
       ) {
         reason = 'Parcel is already in transit';
       } else if (delivery.status === DeliveryStatusEnum.DELIVERED) {
@@ -864,8 +972,8 @@ export class DeliveryService {
 
     // Check per-user limit
     const userId = new Types.ObjectId(user._id);
-    if (coupon.usedBy && coupon.usedBy.some(id => id.toString() === userId.toString())) {
-      const userUsageCount = coupon.usedBy.filter(id => id.toString() === userId.toString()).length;
+    if (coupon.usedBy && coupon.usedBy.some((id) => id.toString() === userId.toString())) {
+      const userUsageCount = coupon.usedBy.filter((id) => id.toString() === userId.toString()).length;
       if (userUsageCount >= coupon.usageLimitPerUser) {
         throw new BadRequestException('You have already used this coupon the maximum number of times');
       }
@@ -881,7 +989,7 @@ export class DeliveryService {
 
     // Check applicable users
     if (coupon.applicableUsers && coupon.applicableUsers.length > 0) {
-      const isApplicable = coupon.applicableUsers.some(id => id.toString() === userId.toString());
+      const isApplicable = coupon.applicableUsers.some((id) => id.toString() === userId.toString());
       if (!isApplicable) {
         throw new BadRequestException('This coupon is not applicable to your account');
       }
@@ -927,7 +1035,10 @@ export class DeliveryService {
         status: { $in: activeStatuses },
       })
       .sort({ createdAt: -1 })
-      .populate('rider', 'firstName lastName profilePhoto vehicleType vehiclePlateNumber averageRating currentLatitude currentLongitude')
+      .populate(
+        'rider',
+        'firstName lastName profilePhoto vehicleType vehiclePlateNumber averageRating currentLatitude currentLongitude',
+      )
       .lean();
 
     if (!delivery) {
@@ -963,6 +1074,18 @@ export class DeliveryService {
     };
   }
 
+  // ============ Catalog ============
+
+  async getCategories() {
+    const data = await this.deliveryRepository.findActiveCategories();
+    return { success: true, message: 'Categories retrieved', data };
+  }
+
+  async getHandling() {
+    const data = await this.deliveryRepository.findActiveHandling();
+    return { success: true, message: 'Special handling options retrieved', data };
+  }
+
   // ============ Private Helper Methods ============
 
   private async calculatePricing(body: CreateDeliveryRequestDto) {
@@ -972,16 +1095,22 @@ export class DeliveryService {
       throw new BadRequestException('Pricing configuration not available');
     }
 
-    // Calculate distance
-    const distance = this.deliveryRepository.calculateDistance(
-      parseFloat(body.pickupLocation.latitude),
-      parseFloat(body.pickupLocation.longitude),
-      parseFloat(body.dropoffLocation.latitude),
-      parseFloat(body.dropoffLocation.longitude),
-    );
+    // Use client-provided distance (Google Maps) if available, otherwise fallback to Haversine
+    const distance =
+      body.estimatedDistance && body.estimatedDistance > 0
+        ? body.estimatedDistance
+        : this.deliveryRepository.calculateDistance(
+            parseFloat(body.pickupLocation.latitude),
+            parseFloat(body.pickupLocation.longitude),
+            parseFloat(body.dropoffLocation.latitude),
+            parseFloat(body.dropoffLocation.longitude),
+          );
 
-    // Estimate duration
-    const duration = this.deliveryRepository.estimateDuration(distance);
+    // Use client-provided duration if available, otherwise estimate from distance
+    const duration =
+      body.estimatedDuration && body.estimatedDuration > 0
+        ? body.estimatedDuration
+        : this.deliveryRepository.estimateDuration(distance);
 
     // Get zones
     const pickupZone = await this.deliveryRepository.findZoneByCoordinates(
@@ -994,23 +1123,25 @@ export class DeliveryService {
       parseFloat(body.dropoffLocation.longitude),
     );
 
-    const isInterZone =
-      pickupZone && dropoffZone && pickupZone._id.toString() !== dropoffZone._id.toString();
-
-    // Get weight pricing
-    const weightPricing = await this.deliveryRepository.findWeightPricing(
-      body.parcelDetails.weight,
-    );
+    const isInterZone = pickupZone && dropoffZone && pickupZone._id.toString() !== dropoffZone._id.toString();
 
     // Get time pricing
-    const scheduledTime = body.scheduledPickupTime
-      ? new Date(body.scheduledPickupTime)
-      : new Date();
+    const scheduledTime = body.scheduledPickupTime ? new Date(body.scheduledPickupTime) : new Date();
     const timePricing = await this.deliveryRepository.findTimePricing(scheduledTime);
+
+    // Get category from DB
+    const parcelCategory = body.parcelDetails.category || 'other';
+    const categoryDoc = await this.deliveryRepository.findCategoryBySlug(parcelCategory);
+    const categoryMultiplier = categoryDoc?.priceMultiplier || config.categoryMultipliers?.[parcelCategory] || 1.0;
+    const categoryAdditionalFee = categoryDoc?.additionalFee || 0;
+
+    // Get special handling from DB
+    const handlingSlugs: string[] = body.parcelDetails.specialHandling || [];
+    const handlingDocs = await this.deliveryRepository.findHandlingBySlugs(handlingSlugs);
+    const handlingTotalFee = handlingDocs.reduce((sum, h) => sum + (h.additionalFee || 0), 0);
 
     // Calculate multipliers
     const zoneMultiplier = pickupZone?.priceMultiplier || 1.0;
-    const weightMultiplier = weightPricing?.priceMultiplier || 1.0;
     const timeMultiplier = timePricing?.priceMultiplier || 1.0;
     const deliveryTypeMultiplier =
       body.deliveryType === DeliveryTypeEnum.QUICK
@@ -1018,18 +1149,24 @@ export class DeliveryService {
         : config.scheduledDeliveryMultiplier || 1.0;
     const interZoneMultiplier = isInterZone ? config.interZoneMultiplier || 1.0 : 1.0;
 
+    // Size-based pricing from config
+    const parcelSize = body.parcelDetails.size || 'medium';
+    const sizeFee = config.sizeFees?.[parcelSize] || 0;
+    const sizeMultiplier = config.sizeMultipliers?.[parcelSize] || 1.0;
+
     // Calculate base prices
     const basePrice = config.baseDeliveryFee;
     const distancePrice = Math.round(distance * config.pricePerKm);
-    const weightPrice = weightPricing?.additionalFee || 0;
     const timePrice = timePricing?.additionalFee || 0;
 
-    // Calculate subtotal with multipliers
-    let subtotal = basePrice + distancePrice + weightPrice + timePrice;
+    // Calculate subtotal with all multipliers (size, category, zone, time, deliveryType, interZone)
+    // Weight removed — only size matters
+    let subtotal = basePrice + distancePrice + timePrice + sizeFee + categoryAdditionalFee + handlingTotalFee;
     subtotal = Math.round(
       subtotal *
+        sizeMultiplier *
+        categoryMultiplier *
         zoneMultiplier *
-        weightMultiplier *
         timeMultiplier *
         deliveryTypeMultiplier *
         interZoneMultiplier,
@@ -1077,13 +1214,17 @@ export class DeliveryService {
       pickupZone,
       dropoffZone,
       isInterZone,
-      weightPricing,
       timePricing,
       coupon,
       breakdown: {
         basePrice,
         distancePrice,
-        weightPrice,
+        weightPrice: 0,
+        sizeFee,
+        categoryAdditionalFee,
+        handlingFee: handlingTotalFee,
+        sizeMultiplierPrice: sizeMultiplier > 1 ? Math.round(subtotal - subtotal / sizeMultiplier) : 0,
+        categoryMultiplierPrice: categoryMultiplier > 1 ? Math.round(subtotal - subtotal / categoryMultiplier) : 0,
         timeMultiplierPrice: Math.round(subtotal * (timeMultiplier - 1)),
         zoneMultiplierPrice: Math.round(subtotal * (zoneMultiplier - 1)),
         surgePrice: 0,
@@ -1095,10 +1236,24 @@ export class DeliveryService {
         totalPrice,
         currency: config.currency,
         zoneMultiplier,
-        weightMultiplier,
+        weightMultiplier: 1.0,
         timeMultiplier,
+        sizeMultiplier,
+        categoryMultiplier,
         deliveryTypeMultiplier,
       },
     };
+  }
+
+  // ============ Catalog (Categories & Handling) ============
+
+  async getCategories() {
+    const data = await this.deliveryRepository.findActiveCategories();
+    return { success: true, message: 'Categories retrieved', data };
+  }
+
+  async getHandling() {
+    const data = await this.deliveryRepository.findActiveHandling();
+    return { success: true, message: 'Special handling options retrieved', data };
   }
 }

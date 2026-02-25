@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsBoolean,
   IsEnum,
+  IsArray,
   ValidateNested,
   IsDateString,
   Min,
@@ -53,7 +54,7 @@ export class LocationDto {
 export class ParcelDto {
   @ApiProperty({ example: 'Documents and small electronics' })
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   description: string;
 
   @ApiPropertyOptional({ enum: ParcelSizeEnum, example: ParcelSizeEnum.SMALL })
@@ -61,11 +62,11 @@ export class ParcelDto {
   @IsOptional()
   size?: ParcelSizeEnum;
 
-  @ApiProperty({ example: 2.5, description: 'Weight in kg (required for pricing)' })
+  @ApiPropertyOptional({ example: 2.5, description: 'Weight in kg (optional, not used for pricing)' })
   @IsNumber()
-  @IsNotEmpty()
-  @Min(0.1)
-  weight: number; // Now required per updated flow
+  @IsOptional()
+  @Min(0)
+  weight?: number;
 
   @ApiPropertyOptional({ example: 1 })
   @IsNumber()
@@ -88,6 +89,12 @@ export class ParcelDto {
   @IsOptional()
   @Min(0)
   declaredValue?: number;
+
+  @ApiPropertyOptional({ example: ['fragile', 'keep_upright'], description: 'Special handling slugs' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  specialHandling?: string[];
 }
 
 export class CreateDeliveryRequestDto {
@@ -122,10 +129,41 @@ export class CreateDeliveryRequestDto {
   couponCode?: string;
 
   @ApiPropertyOptional({
+    example: 'wallet',
+    description: 'Payment method: wallet, card, bank_transfer, or pay_at_pickup',
+  })
+  @IsString()
+  @IsOptional()
+  paymentMethod?: string;
+
+  @ApiPropertyOptional({
     example: 'PAY_ref_123456',
-    description: 'Required for scheduled deliveries. Payment must be completed before scheduling is confirmed (PRD 7.2)',
+    description:
+      'Required for scheduled deliveries. Payment must be completed before scheduling is confirmed (PRD 7.2)',
   })
   @IsString()
   @IsOptional()
   paymentReference?: string;
+
+  @ApiPropertyOptional({
+    example: 12.5,
+    description:
+      'Estimated distance in km from the client (Google Maps Directions API). ' +
+      'If provided, the server will use this instead of Haversine calculation.',
+  })
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  estimatedDistance?: number;
+
+  @ApiPropertyOptional({
+    example: 35,
+    description:
+      'Estimated duration in minutes from the client (Google Maps Directions API). ' +
+      'If provided, the server will use this instead of its own estimate.',
+  })
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  estimatedDuration?: number;
 }
