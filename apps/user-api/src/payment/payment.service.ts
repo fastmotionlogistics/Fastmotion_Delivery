@@ -12,6 +12,8 @@ import {
   DeliveryPaymentStatusEnum,
   DeliveryPaymentMethodEnum,
   DeliveryStatusEnum,
+  TransactionType,
+  TransactionStatus,
 } from '@libs/common';
 import { PaymentRepository } from './repository';
 import { InitiatePaymentDto, FundWalletDto, VerifyPaymentDto, WithdrawDto } from './dto';
@@ -290,7 +292,7 @@ export class PaymentService {
           // Wallet funding — no delivery to look up
           const isWalletFunding = !payment.deliveryRequest && payment.description === 'Wallet funding';
           if (isWalletFunding) {
-            const wallet = await this.paymentRepository.getOrCreateWallet(
+            const { depositBalance } = await this.computeWalletBalance(
               payment.user as Types.ObjectId,
             );
             return {
@@ -299,7 +301,7 @@ export class PaymentService {
               data: {
                 status: DeliveryPaymentStatusEnum.PAID,
                 paidAt: updatedPayment?.paidAt,
-                walletBalance: wallet.depositBalance,
+                walletBalance: depositBalance,
               },
             };
           }
@@ -383,9 +385,67 @@ export class PaymentService {
     return this.getPaymentStatus(user, body.reference);
   }
 
+  private async computeWalletBalance(userId: Types.ObjectId): Promise<{ depositBalance: number; totalCredits: number; totalDebits: number }> {
+    // TransactionType enum uses numeric values (CREDIT=2, DEBIT=1) but schema
+    // stores them as String, so compare against both string and number forms
+    const creditVal = TransactionType.CREDIT; // 2
+    const debitVal = TransactionType.DEBIT;   // 1
+
+    const balances = await this.paymentRepository.walletTransactionModel.aggregate([
+      {
+        $match: {
+          user: userId,
+          status: { $in: [TransactionStatus.COMPLETED, 'COMPLETED'] },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalCredits: {
+            $sum: {
+              $cond: [
+                { $in: ['$type', [creditVal, String(creditVal), 'CREDIT']] },
+                '$amount',
+                0,
+              ],
+            },
+          },
+          totalDebits: {
+            $sum: {
+              $cond: [
+                { $in: ['$type', [debitVal, String(debitVal), 'DEBIT']] },
+                '$amount',
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const totalCredits = balances[0]?.totalCredits || 0;
+    const totalDebits = balances[0]?.totalDebits || 0;
+    return { depositBalance: totalCredits - totalDebits, totalCredits, totalDebits };
+  }
+
   async getWalletBalance(user: User) {
     const userId = new Types.ObjectId(user._id);
     const wallet = await this.paymentRepository.getOrCreateWallet(userId);
+
+    // Compute balance as aggregate of all completed wallet transactions
+    const { depositBalance, totalCredits, totalDebits } = await this.computeWalletBalance(userId);
+
+    // Sync wallet document if out of date
+    if (wallet.depositBalance !== depositBalance) {
+      await this.paymentRepository.walletModel.findByIdAndUpdate(wallet._id, {
+        $set: {
+          depositBalance,
+          totalBalance: depositBalance + (wallet.withdrawableBalance || 0),
+          totalDeposited: totalCredits,
+          totalWithdrawn: totalDebits,
+        },
+      });
+    }
 
     return {
       success: true,
@@ -393,15 +453,15 @@ export class PaymentService {
       data: {
         wallet: {
           id: wallet._id,
-          depositBalance: wallet.depositBalance,
+          depositBalance,
           withdrawableBalance: wallet.withdrawableBalance,
-          totalBalance: wallet.totalBalance,
+          totalBalance: depositBalance + (wallet.withdrawableBalance || 0),
           currency: wallet.currency,
           currencySymbol: wallet.currencySymbol,
           isActive: wallet.isActive,
           isLocked: wallet.isLocked,
-          totalDeposited: wallet.totalDeposited,
-          totalWithdrawn: wallet.totalWithdrawn,
+          totalDeposited: totalCredits,
+          totalWithdrawn: totalDebits,
           lastTransactionDate: wallet.lastTransactionDate,
         },
       },

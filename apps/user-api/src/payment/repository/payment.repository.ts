@@ -330,53 +330,51 @@ export class PaymentRepository {
     paymentReference: string,
     metadata?: Record<string, any>,
   ): Promise<{ wallet: Wallet; transaction: WalletTransaction }> {
-    const session = await this.walletModel.startSession();
-    session.startTransaction();
+    // Re-read wallet to get fresh balances (avoid stale .lean() snapshot)
+    const freshWallet = await this.walletModel.findById(wallet._id).lean();
+    if (!freshWallet) throw new Error('Wallet not found during funding');
 
-    try {
-      const transactionRef = this.generateTransactionRef();
+    const transactionRef = this.generateTransactionRef();
 
-      // Create wallet transaction record
-      const transactionData: Partial<WalletTransaction> = {
-        transactionRef,
-        user: wallet.user,
-        wallet: wallet._id,
-        type: TransactionType.CREDIT,
-        category: TransactionCategory.DEPOSIT,
-        balanceType: BalanceType.DEPOSIT,
-        status: TransactionStatus.COMPLETED,
-        amount,
-        depositBalanceBefore: wallet.depositBalance,
-        depositBalanceAfter: wallet.depositBalance + amount,
-        withdrawableBalanceBefore: wallet.withdrawableBalance,
-        withdrawableBalanceAfter: wallet.withdrawableBalance,
-        totalBalanceBefore: wallet.totalBalance,
-        totalBalanceAfter: wallet.totalBalance + amount,
-        description,
-        reference: paymentReference,
-        completedAt: new Date(),
-        metadata,
-      };
+    // 1. Update wallet balance first (atomic $inc, no session needed)
+    const updatedWallet = await this.walletModel.findByIdAndUpdate(
+      freshWallet._id,
+      {
+        $inc: {
+          depositBalance: amount,
+          totalBalance: amount,
+          totalDeposited: amount,
+        },
+        $set: { lastTransactionDate: new Date() },
+      },
+      { new: true },
+    ).lean();
 
-      const transaction = await this.createWalletTransaction(transactionData);
+    // 2. Create wallet transaction record with accurate before/after
+    const transactionData: Partial<WalletTransaction> = {
+      transactionRef,
+      user: freshWallet.user,
+      wallet: freshWallet._id,
+      type: TransactionType.CREDIT,
+      category: TransactionCategory.DEPOSIT,
+      balanceType: BalanceType.DEPOSIT,
+      status: TransactionStatus.COMPLETED,
+      amount,
+      depositBalanceBefore: freshWallet.depositBalance,
+      depositBalanceAfter: freshWallet.depositBalance + amount,
+      withdrawableBalanceBefore: freshWallet.withdrawableBalance,
+      withdrawableBalanceAfter: freshWallet.withdrawableBalance,
+      totalBalanceBefore: freshWallet.totalBalance,
+      totalBalanceAfter: freshWallet.totalBalance + amount,
+      description,
+      reference: paymentReference,
+      completedAt: new Date(),
+      metadata,
+    };
 
-      // Update wallet balance
-      const updatedWallet = await this.updateWalletBalance(
-        wallet._id,
-        amount,
-        0,
-        session,
-      );
+    const transaction = await this.createWalletTransaction(transactionData);
 
-      await session.commitTransaction();
-
-      return { wallet: updatedWallet!, transaction };
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
-    }
+    return { wallet: updatedWallet!, transaction };
   }
 
   async processRefund(
