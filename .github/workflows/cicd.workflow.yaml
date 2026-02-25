@@ -63,8 +63,6 @@ jobs:
             cd /var/www/apps/fastmotionservice
             tar -xzf /tmp/deploy.tar.gz
             rm /tmp/deploy.tar.gz
-            pm2 restart user || pm2 start dist/apps/user-api/main.js --name user
-            pm2 restart delivery || pm2 start dist/apps/delivery-api/main.js --name delivery
-            pm2 restart admin || pm2 start dist/apps/admin-api/main.js --name admin
+            pm2 restart ecosystem.config.js || pm2 start ecosystem.config.js
             pm2 save
             pm2 startup systemd -u root --hp /root || true
