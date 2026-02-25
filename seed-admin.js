@@ -9,9 +9,7 @@ const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcryptjs');
 
 // ── Configuration ─────────────────────────────────────────
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  'mongodb+srv://godson:Password123@cluster0.lb5lhh7.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+const MONGODB_URI = process.env.MONGODB_URI;
 
 // ── All Permission Enums ─────────────────────────────────
 const PERMISSIONS = {
