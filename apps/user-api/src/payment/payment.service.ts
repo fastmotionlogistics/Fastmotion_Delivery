@@ -482,8 +482,21 @@ export class PaymentService {
       throw new ForbiddenException('You do not have access to this payment');
     }
 
-    if (payment.status === DeliveryPaymentStatusEnum.PAID) {
-      return { success: true, message: 'Wallet funding already completed', data: { payment } };
+    // Check if a wallet transaction already exists for this payment reference
+    // to avoid double-crediting the wallet
+    const existingTx = await this.paymentRepository.walletTransactionModel
+      .findOne({ reference }).lean();
+    if (existingTx) {
+      const wallet = await this.paymentRepository.getOrCreateWallet(userId);
+      return {
+        success: true,
+        message: 'Wallet funding already completed',
+        data: {
+          wallet: { balance: wallet.depositBalance, currency: wallet.currency },
+          transactionRef: existingTx.transactionRef,
+          amountAdded: payment.amount,
+        },
+      };
     }
 
     const wallet = await this.paymentRepository.getOrCreateWallet(userId);
@@ -497,10 +510,13 @@ export class PaymentService {
         { paymentId: payment._id?.toString() },
       );
 
-    await this.paymentRepository.updatePaymentByReference(reference, {
-      status: DeliveryPaymentStatusEnum.PAID,
-      paidAt: new Date(),
-    });
+    // Ensure payment is marked as paid
+    if (payment.status !== DeliveryPaymentStatusEnum.PAID) {
+      await this.paymentRepository.updatePaymentByReference(reference, {
+        status: DeliveryPaymentStatusEnum.PAID,
+        paidAt: new Date(),
+      });
+    }
 
     return {
       success: true,
@@ -713,10 +729,29 @@ export class PaymentService {
       providerResponse: data.providerResponse,
     });
 
-    // If this is a wallet funding
+    // If this is a wallet funding — credit wallet directly
     if (!payment.deliveryRequest && payment.description === 'Wallet funding') {
       const userId = payment.user as Types.ObjectId;
-      await this.verifyWalletFunding(reference, userId);
+
+      // Guard against double-credit (webhook + polling race)
+      const existingTx = await this.paymentRepository.walletTransactionModel
+        .findOne({ reference }).lean();
+      if (existingTx) {
+        this.logger.log(`Wallet funding already processed for ref ${reference}, skipping`);
+        return;
+      }
+
+      const wallet = await this.paymentRepository.getOrCreateWallet(userId);
+
+      await this.paymentRepository.processWalletFunding(
+        wallet,
+        payment.amount,
+        'Wallet funding via Monnify',
+        reference,
+        { paymentId: payment._id?.toString() },
+      );
+
+      this.logger.log(`Wallet funded for user ${userId}: ₦${payment.amount} via ref ${reference}`);
       return;
     }
 
