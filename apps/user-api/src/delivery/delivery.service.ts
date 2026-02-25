@@ -69,9 +69,7 @@ export class DeliveryService {
     //   - otherwise (card/bank pending) → PENDING until payment webhook confirms
     let initialStatus: DeliveryStatusEnum;
     if (!isQuickDelivery) {
-      initialStatus = body.paymentReference
-        ? DeliveryStatusEnum.SCHEDULED
-        : DeliveryStatusEnum.PENDING;
+      initialStatus = body.paymentReference ? DeliveryStatusEnum.SCHEDULED : DeliveryStatusEnum.PENDING;
     } else if (body.paymentMethod === 'pay_at_pickup') {
       // Pay at pickup: search for riders immediately, user pays when rider arrives
       initialStatus = DeliveryStatusEnum.SEARCHING_RIDER;
@@ -156,7 +154,6 @@ export class DeliveryService {
     };
   }
 
-
   async getDeliveryEstimate(user: User, body: CreateDeliveryRequestDto) {
     // console.log(user, '=====the user====');
     const pricing = await this.calculatePricing(body);
@@ -202,15 +199,18 @@ export class DeliveryService {
     };
   }
 
-  async getMyDeliveries(user: User, filters: {
-    status?: string;
-    deliveryType?: string;
-    search?: string;
-    dateFrom?: string;
-    dateTo?: string;
-    page?: number;
-    limit?: number;
-  }) {
+  async getMyDeliveries(
+    user: User,
+    filters: {
+      status?: string;
+      deliveryType?: string;
+      search?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      page?: number;
+      limit?: number;
+    },
+  ) {
     const { data, total } = await this.deliveryRepository.findByCustomer(user._id, filters);
 
     return {
@@ -264,9 +264,7 @@ export class DeliveryService {
     let estimatedArrival = null;
 
     if (delivery.rider) {
-      const riderInfo = await this.deliveryRepository.findRiderPublicInfo(
-        delivery.rider as unknown as Types.ObjectId,
-      );
+      const riderInfo = await this.deliveryRepository.findRiderPublicInfo(delivery.rider as unknown as Types.ObjectId);
       if (riderInfo) {
         rider = {
           firstName: riderInfo.firstName,
@@ -283,9 +281,7 @@ export class DeliveryService {
           };
 
           const targetLocation =
-            delivery.status === DeliveryStatusEnum.IN_TRANSIT
-              ? delivery.dropoffLocation
-              : delivery.pickupLocation;
+            delivery.status === DeliveryStatusEnum.IN_TRANSIT ? delivery.dropoffLocation : delivery.pickupLocation;
 
           const dist = this.deliveryRepository.calculateDistance(
             parseFloat(riderInfo.currentLatitude),
@@ -315,7 +311,7 @@ export class DeliveryService {
         rider,
         riderLocation,
         estimatedArrival,
-        statusHistory: delivery.statusHistory,
+        // statusHistory: delivery?.statusHistory,
         createdAt: delivery.createdAt,
         riderAcceptedAt: delivery.riderAcceptedAt,
         arrivedAtPickupAt: delivery.arrivedAtPickupAt,
@@ -1247,13 +1243,13 @@ export class DeliveryService {
 
   // ============ Catalog (Categories & Handling) ============
 
-  async getCategories() {
-    const data = await this.deliveryRepository.findActiveCategories();
-    return { success: true, message: 'Categories retrieved', data };
-  }
+  // async getCategories() {
+  //   const data = await this.deliveryRepository.findActiveCategories();
+  //   return { success: true, message: 'Categories retrieved', data };
+  // }
 
-  async getHandling() {
-    const data = await this.deliveryRepository.findActiveHandling();
-    return { success: true, message: 'Special handling options retrieved', data };
-  }
+  // async getHandling() {
+  //   const data = await this.deliveryRepository.findActiveHandling();
+  //   return { success: true, message: 'Special handling options retrieved', data };
+  // }
 }
