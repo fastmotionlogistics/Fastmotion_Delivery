@@ -1091,22 +1091,29 @@ export class DeliveryService {
       throw new BadRequestException('Pricing configuration not available');
     }
 
-    // Use client-provided distance (Google Maps) if available, otherwise fallback to Haversine
-    const distance =
-      body.estimatedDistance && body.estimatedDistance > 0
-        ? body.estimatedDistance
-        : this.deliveryRepository.calculateDistance(
-            parseFloat(body.pickupLocation.latitude),
-            parseFloat(body.pickupLocation.longitude),
-            parseFloat(body.dropoffLocation.latitude),
-            parseFloat(body.dropoffLocation.longitude),
-          );
+    // Always use client-provided Google Maps distance/duration for consistency.
+    // The client MUST send these values (fetched from Google Directions API).
+    // Only fall back to Haversine as a last resort (will differ from Google route distance).
+    let distance: number;
+    let duration: number;
 
-    // Use client-provided duration if available, otherwise estimate from distance
-    const duration =
-      body.estimatedDuration && body.estimatedDuration > 0
-        ? body.estimatedDuration
-        : this.deliveryRepository.estimateDuration(distance);
+    if (body.estimatedDistance && body.estimatedDistance > 0) {
+      distance = body.estimatedDistance;
+    } else {
+      // Fallback: Haversine straight-line distance (less accurate than road distance)
+      distance = this.deliveryRepository.calculateDistance(
+        parseFloat(body.pickupLocation.latitude),
+        parseFloat(body.pickupLocation.longitude),
+        parseFloat(body.dropoffLocation.latitude),
+        parseFloat(body.dropoffLocation.longitude),
+      );
+    }
+
+    if (body.estimatedDuration && body.estimatedDuration > 0) {
+      duration = body.estimatedDuration;
+    } else {
+      duration = this.deliveryRepository.estimateDuration(distance);
+    }
 
     // Get zones
     const pickupZone = await this.deliveryRepository.findZoneByCoordinates(
