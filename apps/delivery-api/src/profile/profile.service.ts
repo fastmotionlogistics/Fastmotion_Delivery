@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Rider, RiderDocument } from '@libs/database';
@@ -10,12 +10,14 @@ import {
   UpdateLocationDto,
   UpdateFcmTokenDto,
 } from './dto';
+import { MonnifyService } from '@libs/common/modules/monnify';
 
 @Injectable()
 export class ProfileService {
   constructor(
     @InjectModel(Rider.name)
     private readonly riderModel: Model<RiderDocument>,
+    private readonly monnifyService: MonnifyService,
   ) {}
 
   async getProfile(rider: Rider) {
@@ -84,6 +86,7 @@ export class ProfileService {
       {
         $set: {
           bankName: body.bankName,
+          bankCode: body.bankCode,
           bankAccountNumber: body.bankAccountNumber,
           bankAccountName: body.bankAccountName,
         },
@@ -95,6 +98,8 @@ export class ProfileService {
       message: 'Bank details updated',
       data: {
         bankName: body.bankName,
+        bankCode: body.bankCode,
+        bankAccountNumber: body.bankAccountNumber,
         bankAccountName: body.bankAccountName,
       },
     };
@@ -133,6 +138,59 @@ export class ProfileService {
       success: true,
       message: 'FCM token updated',
       data: null,
+    };
+  }
+
+  // ═══════════════════════════════════════════════
+  //  BANK LIST (Monnify)
+  // ═══════════════════════════════════════════════
+
+  async getBankList() {
+    const banks = await this.monnifyService.getBankList();
+
+    return {
+      success: true,
+      message: 'Bank list retrieved',
+      data: banks,
+    };
+  }
+
+  // ═══════════════════════════════════════════════
+  //  VALIDATE ACCOUNT (Monnify)
+  // ═══════════════════════════════════════════════
+
+  async validateBankAccount(accountNumber: string, bankCode: string) {
+    if (!accountNumber || accountNumber.length !== 10) {
+      throw new BadRequestException('Account number must be 10 digits');
+    }
+    if (!bankCode) {
+      throw new BadRequestException('Bank code is required');
+    }
+
+    const result = await this.monnifyService.validateBankAccount(accountNumber, bankCode);
+
+    return {
+      success: true,
+      message: 'Account validated',
+      data: result,
+    };
+  }
+
+  // ═══════════════════════════════════════════════
+  //  GET WITHDRAWAL ACCOUNT
+  // ═══════════════════════════════════════════════
+
+  async getWithdrawalAccount(rider: Rider) {
+    return {
+      success: true,
+      message: 'Withdrawal account retrieved',
+      data: {
+        bankName: rider.bankName || null,
+        bankCode: (rider as any).bankCode || null,
+        bankAccountNumber: rider.bankAccountNumber || null,
+        bankAccountName: rider.bankAccountName || null,
+        isSet: !!(rider.bankName && rider.bankAccountNumber && rider.bankAccountName),
+      },
     };
   }
 

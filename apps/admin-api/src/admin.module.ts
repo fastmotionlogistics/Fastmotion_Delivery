@@ -14,6 +14,8 @@ import { PricingModule } from './pricing/pricing.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { RiderManagementModule } from './rider-management/rider-management.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { AdminDisputeModule } from './dispute/dispute.module';
+import { AdminAppVersionModule } from './app-version/app-version.module';
 
 @Module({
   imports: [
@@ -65,6 +67,8 @@ import { CatalogModule } from './catalog/catalog.module';
     DeliveryModule,
     RiderManagementModule,
     CatalogModule,
+    AdminDisputeModule,
+    AdminAppVersionModule,
   ],
   providers: [ShutdownService],
 })

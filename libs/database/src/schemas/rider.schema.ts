@@ -153,6 +153,10 @@ export class Rider extends AbstractDocument {
   @Prop({ type: Number, default: 0 })
   totalEarnings: number;
 
+  @ApiProperty({ description: 'Current withdrawable wallet balance (NGN)' })
+  @Prop({ type: Number, default: 0, min: 0 })
+  walletBalance: number;
+
   @ApiProperty()
   @Prop({ type: Number, default: 0, min: 0, max: 5 })
   averageRating: number;
@@ -198,6 +202,10 @@ export class Rider extends AbstractDocument {
   @ApiProperty()
   @Prop({ type: String, required: false })
   bankName?: string;
+
+  @ApiProperty()
+  @Prop({ type: String, required: false })
+  bankCode?: string;
 
   @ApiProperty()
   @Prop({ type: String, required: false })

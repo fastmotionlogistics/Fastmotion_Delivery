@@ -28,20 +28,7 @@ export class DisputeController {
     return await this.disputeService.createDispute(user, body);
   }
 
-  @ApiOperation({ summary: 'Get dispute by ID' })
-  @Get(':id')
-  async getDisputeById(@CurrentUser() user: User, @Param('id') id: string) {
-    return await this.disputeService.getDisputeById(user, id);
-  }
-
-  @ApiOperation({ summary: 'Get dispute by delivery request ID' })
-  @Get('delivery/:deliveryId')
-  async getDisputeByDelivery(
-    @CurrentUser() user: User,
-    @Param('deliveryId') deliveryId: string,
-  ) {
-    return await this.disputeService.getDisputeByDelivery(user, deliveryId);
-  }
+  // ── Static GET routes MUST come before :id param route ──
 
   @ApiOperation({ summary: 'Get all disputes for the current user' })
   @ApiQuery({ name: 'status', required: false })
@@ -55,6 +42,44 @@ export class DisputeController {
     @Query('limit') limit?: number,
   ) {
     return await this.disputeService.getMyDisputes(user, { status, page, limit });
+  }
+
+  @ApiOperation({ summary: 'Get dispute reasons' })
+  @Get('reasons/list')
+  async getDisputeReasons() {
+    return await this.disputeService.getDisputeReasons();
+  }
+
+  @ApiOperation({ summary: 'Get dispute statistics for the current user' })
+  @Get('stats/me')
+  async getMyDisputeStats(@CurrentUser() user: User) {
+    return await this.disputeService.getMyDisputeStats(user);
+  }
+
+  @ApiOperation({ summary: 'Check if customer can create dispute for a delivery' })
+  @Get('can-dispute/:deliveryId')
+  async canCreateDispute(
+    @CurrentUser() user: User,
+    @Param('deliveryId') deliveryId: string,
+  ) {
+    return await this.disputeService.canCreateDisputeForDelivery(user, deliveryId);
+  }
+
+  @ApiOperation({ summary: 'Get dispute by delivery request ID' })
+  @Get('delivery/:deliveryId')
+  async getDisputeByDelivery(
+    @CurrentUser() user: User,
+    @Param('deliveryId') deliveryId: string,
+  ) {
+    return await this.disputeService.getDisputeByDelivery(user, deliveryId);
+  }
+
+  // ── Parameterised :id routes LAST ──
+
+  @ApiOperation({ summary: 'Get dispute by ID' })
+  @Get(':id')
+  async getDisputeById(@CurrentUser() user: User, @Param('id') id: string) {
+    return await this.disputeService.getDisputeById(user, id);
   }
 
   @ApiOperation({ summary: 'Add a message to a dispute' })
@@ -77,11 +102,5 @@ export class DisputeController {
     @Body() body: UpdateDisputeDto,
   ) {
     return await this.disputeService.updateDispute(user, id, body);
-  }
-
-  @ApiOperation({ summary: 'Get dispute reasons' })
-  @Get('reasons/list')
-  async getDisputeReasons() {
-    return await this.disputeService.getDisputeReasons();
   }
 }

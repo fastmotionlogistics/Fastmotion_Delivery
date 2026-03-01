@@ -9,9 +9,12 @@ import {
   RiderSchema,
   User,
   UserSchema,
+  PricingConfig,
+  PricingConfigSchema,
 } from '@libs/database';
 import { GatewayModule } from '@libs/common/modules/gateway';
 import { NotificationModule } from '@libs/common/modules/notification';
+import { EarningsModule } from '../earnings/earnings.module';
 
 @Module({
   imports: [
@@ -19,9 +22,11 @@ import { NotificationModule } from '@libs/common/modules/notification';
       { name: DeliveryRequest.name, schema: DeliveryRequestSchema },
       { name: Rider.name, schema: RiderSchema },
       { name: User.name, schema: UserSchema },
+      { name: PricingConfig.name, schema: PricingConfigSchema },
     ]),
     GatewayModule,
     NotificationModule,
+    EarningsModule,
   ],
   controllers: [DeliveryController],
   providers: [DeliveryService],

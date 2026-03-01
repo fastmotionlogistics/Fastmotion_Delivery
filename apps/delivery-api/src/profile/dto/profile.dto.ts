@@ -84,13 +84,18 @@ export class UpdateBankDetailsDto {
   @IsString()
   bankName: string;
 
+  @ApiProperty({ example: '058' })
+  @IsString()
+  bankCode: string;
+
   @ApiProperty({ example: '0123456789' })
   @IsString()
   bankAccountNumber: string;
 
-  @ApiProperty({ example: 'John Doe' })
+  @ApiPropertyOptional({ example: 'John Doe' })
   @IsString()
-  bankAccountName: string;
+  @IsOptional()
+  bankAccountName?: string;
 }
 
 export class UpdateLocationDto {

@@ -17,6 +17,8 @@ import { DeliveryModule } from './delivery/delivery.module';
 import { PaymentModule } from './payment/payment.module';
 import { RatingModule } from './rating/rating.module';
 import { DisputeModule } from './dispute/dispute.module';
+import { UserNotificationModule } from './notification/notification.module';
+import { AppVersionModule } from './app-version/app-version.module';
 
 @Module({
   imports: [
@@ -58,6 +60,8 @@ import { DisputeModule } from './dispute/dispute.module';
     PaymentModule,
     RatingModule,
     DisputeModule,
+    UserNotificationModule,
+    AppVersionModule,
     GatewayModule,
     MonnifyModule,
   ],

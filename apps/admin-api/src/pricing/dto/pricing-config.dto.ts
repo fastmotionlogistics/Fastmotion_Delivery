@@ -102,6 +102,19 @@ export class CreatePricingConfigDto {
   @Max(1)
   cancellationFeeAfterPickupPercentage?: number;
 
+  @ApiPropertyOptional({ example: 0.80, description: 'Rider commission percentage (0.80 = 80%)' })
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @Max(1)
+  riderCommissionPercentage?: number;
+
+  @ApiPropertyOptional({ example: 100, description: 'Minimum amount rider receives per delivery' })
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  minimumRiderPayout?: number;
+
   @ApiPropertyOptional({ example: 100, description: 'Rescheduling fee' })
   @IsNumber()
   @IsOptional()

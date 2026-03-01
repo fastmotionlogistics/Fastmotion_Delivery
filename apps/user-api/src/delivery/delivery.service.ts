@@ -135,6 +135,17 @@ export class DeliveryService {
       deliveryType: body.deliveryType,
     });
 
+    // Notify user: delivery created
+    this.notificationService.send({
+      recipientId: user._id,
+      recipientType: NotificationRecipientType.USER,
+      title: isQuickDelivery ? 'Delivery Created! 📦' : 'Delivery Scheduled! 📅',
+      body: isQuickDelivery
+        ? `Your delivery ${trackingNumber} has been created. Searching for nearby riders...`
+        : `Your delivery ${trackingNumber} has been scheduled for ${new Date(body.scheduledPickupTime).toLocaleDateString('en-NG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.`,
+      data: { type: 'delivery_created', deliveryId: delivery._id.toString(), trackingNumber },
+    }).catch(() => {});
+
     return {
       success: true,
       message: isQuickDelivery
@@ -626,6 +637,17 @@ export class DeliveryService {
         { type: 'delivery_cancelled', deliveryId: id },
       );
     }
+
+    // Notify user: delivery cancelled
+    this.notificationService.send({
+      recipientId: user._id,
+      recipientType: NotificationRecipientType.USER,
+      title: 'Delivery Cancelled',
+      body: refundAmount > 0
+        ? `Your delivery ${delivery.trackingNumber} has been cancelled. A refund of ₦${refundAmount.toLocaleString()} is being processed.`
+        : `Your delivery ${delivery.trackingNumber} has been cancelled.`,
+      data: { type: 'delivery_cancelled', deliveryId: id, trackingNumber: delivery.trackingNumber },
+    }).catch(() => {});
 
     return {
       success: true,

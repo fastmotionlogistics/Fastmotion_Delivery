@@ -7,6 +7,10 @@ import {
   RiderSchema,
   RiderEarnings,
   RiderEarningsSchema,
+  DeliveryRequest,
+  DeliveryRequestSchema,
+  PricingConfig,
+  PricingConfigSchema,
 } from '@libs/database';
 
 @Module({
@@ -14,6 +18,8 @@ import {
     DatabaseModule.forFeature([
       { name: Rider.name, schema: RiderSchema },
       { name: RiderEarnings.name, schema: RiderEarningsSchema },
+      { name: DeliveryRequest.name, schema: DeliveryRequestSchema },
+      { name: PricingConfig.name, schema: PricingConfigSchema },
     ]),
   ],
   controllers: [EarningsController],

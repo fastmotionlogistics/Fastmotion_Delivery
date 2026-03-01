@@ -116,8 +116,9 @@ export class DisputeService {
       throw new NotFoundException('Dispute not found');
     }
 
-    // Verify ownership
-    if (dispute.customer.toString() !== userId.toString()) {
+    // Verify ownership — customer may be populated (object) or just an ObjectId
+    const customerId = (dispute.customer as any)?._id || dispute.customer;
+    if (customerId.toString() !== userId.toString()) {
       throw new ForbiddenException('You do not have access to this dispute');
     }
 

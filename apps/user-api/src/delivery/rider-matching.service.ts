@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Rider, RiderDocument, DeliveryRequest, DeliveryRequestDocument } from '@libs/database';
+import { Rider, RiderDocument, DeliveryRequest, DeliveryRequestDocument, PricingConfig, PricingConfigDocument } from '@libs/database';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
 import { NotificationService } from '@libs/common/modules/notification';
 import { NotificationRecipientType } from '@libs/database';
@@ -27,9 +27,20 @@ export class RiderMatchingService {
     private readonly riderModel: Model<RiderDocument>,
     @InjectModel(DeliveryRequest.name)
     private readonly deliveryModel: Model<DeliveryRequestDocument>,
+    @InjectModel(PricingConfig.name)
+    private readonly pricingModel: Model<PricingConfigDocument>,
     private readonly gateway: DeliveryGateway,
     private readonly notificationService: NotificationService,
   ) {}
+
+  /** Calculate rider payout after commission */
+  private async computeRiderPayout(totalPrice: number): Promise<{ riderPayout: number; commissionRate: number }> {
+    const config = await this.pricingModel.findOne({ isActive: true }).select('riderCommissionPercentage minimumRiderPayout').lean();
+    const rate = config?.riderCommissionPercentage ?? 0.80;
+    const min = config?.minimumRiderPayout ?? 100;
+    const riderPayout = Math.max(Math.round(totalPrice * rate), min);
+    return { riderPayout, commissionRate: rate };
+  }
 
   /**
    * Handle new quick delivery — find and notify nearby riders
@@ -65,6 +76,10 @@ export class RiderMatchingService {
         return;
       }
 
+      // Calculate rider payout (after commission deduction)
+      const totalPrice = delivery.pricing?.totalPrice || 0;
+      const { riderPayout, commissionRate } = await this.computeRiderPayout(totalPrice);
+
       // Build the delivery request payload to send to riders
       const requestPayload = {
         deliveryId: deliveryIdStr,
@@ -84,6 +99,8 @@ export class RiderMatchingService {
           totalPrice: delivery.pricing?.totalPrice,
           currency: delivery.pricing?.currency || 'NGN',
         },
+        riderPayout,
+        commissionRate,
         createdAt: delivery.createdAt,
       };
 
@@ -104,7 +121,7 @@ export class RiderMatchingService {
               recipientId: rider._id,
               recipientType: NotificationRecipientType.RIDER,
               title: 'New Delivery Request! 📦',
-              body: `Pickup at ${pickupLocation.address || 'nearby location'} — ${rider.distanceKm.toFixed(1)}km away. ₦${delivery.pricing?.totalPrice?.toLocaleString()}`,
+              body: `Pickup at ${pickupLocation.address || 'nearby location'} — ${rider.distanceKm.toFixed(1)}km away. Earn ₦${riderPayout.toLocaleString()}`,
               token: rider.fcmToken,
               data: {
                 type: 'new_delivery_request',

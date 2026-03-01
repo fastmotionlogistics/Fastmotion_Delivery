@@ -4,9 +4,10 @@ import {
   Put,
   Patch,
   Body,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { ProfileService } from './profile.service';
 import {
   UpdateProfileDto,
@@ -54,7 +55,7 @@ export class ProfileController {
     return await this.profileService.uploadDocument(rider, body);
   }
 
-  @ApiOperation({ summary: 'Update bank details' })
+  @ApiOperation({ summary: 'Update bank details (withdrawal account)' })
   @ApiBody({ type: UpdateBankDetailsDto })
   @Patch('bank-details')
   async updateBankDetails(@CurrentRider() rider: Rider, @Body() body: UpdateBankDetailsDto) {
@@ -73,6 +74,29 @@ export class ProfileController {
   @Patch('fcm-token')
   async updateFcmToken(@CurrentRider() rider: Rider, @Body() body: UpdateFcmTokenDto) {
     return await this.profileService.updateFcmToken(rider, body);
+  }
+
+  @ApiOperation({ summary: 'Get list of supported banks from Monnify' })
+  @Get('banks')
+  async getBankList() {
+    return await this.profileService.getBankList();
+  }
+
+  @ApiOperation({ summary: 'Validate bank account number via Monnify' })
+  @ApiQuery({ name: 'accountNumber', required: true })
+  @ApiQuery({ name: 'bankCode', required: true })
+  @Get('validate-account')
+  async validateBankAccount(
+    @Query('accountNumber') accountNumber: string,
+    @Query('bankCode') bankCode: string,
+  ) {
+    return await this.profileService.validateBankAccount(accountNumber, bankCode);
+  }
+
+  @ApiOperation({ summary: 'Get saved withdrawal account details' })
+  @Get('withdrawal-account')
+  async getWithdrawalAccount(@CurrentRider() rider: Rider) {
+    return await this.profileService.getWithdrawalAccount(rider);
   }
 
   @ApiOperation({ summary: 'Get verification status' })

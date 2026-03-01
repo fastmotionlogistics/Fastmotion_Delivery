@@ -8,12 +8,15 @@ import { LoggerModule, ShutdownService } from '@libs/common';
 import { DatabaseModule } from '@libs/database';
 import { MessageModule } from '@libs/common/modules';
 import { GatewayModule } from '@libs/common/modules/gateway';
+import { MonnifyModule } from '@libs/common/modules/monnify';
 
 // FastMotion Delivery Modules
 import { AuthModule } from './auth/auth.module';
 import { ProfileModule } from './profile/profile.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { EarningsModule } from './earnings/earnings.module';
+import { RiderNotificationModule } from './notification/notification.module';
+import { AppVersionModule } from './app-version/app-version.module';
 
 @Module({
   imports: [
@@ -56,7 +59,10 @@ import { EarningsModule } from './earnings/earnings.module';
     ProfileModule,
     DeliveryModule,
     EarningsModule,
+    RiderNotificationModule,
+    AppVersionModule,
     GatewayModule,
+    MonnifyModule,
   ],
   providers: [ShutdownService],
 })

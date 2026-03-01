@@ -33,3 +33,6 @@ export * from './savedAddress.schema';
 
 // Admin
 export * from './admin.schema';
+
+// App Version
+export * from './appVersion.schema';

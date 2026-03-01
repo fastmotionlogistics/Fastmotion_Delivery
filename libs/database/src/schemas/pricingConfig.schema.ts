@@ -124,6 +124,21 @@ export class PricingConfig extends AbstractDocument {
   })
   categoryMultipliers: Record<string, number>;
 
+  // ── Rider Commission ──
+  @ApiProperty({
+    example: 0.80,
+    description: 'Percentage of delivery fee that goes to rider (0.80 = 80%). The remaining 20% is platform commission.',
+  })
+  @Prop({ type: Number, default: 0.80 })
+  riderCommissionPercentage: number;
+
+  @ApiProperty({
+    example: 100,
+    description: 'Minimum amount rider receives per delivery regardless of commission',
+  })
+  @Prop({ type: Number, default: 100 })
+  minimumRiderPayout: number;
+
   // Rescheduling fees
   @ApiProperty({ example: 100, description: 'Fee for rescheduling' })
   @Prop({ type: Number, default: 0 })

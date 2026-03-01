@@ -221,6 +221,71 @@ export class MonnifyService {
   }
 
   // ═══════════════════════════════════════════
+  //  GET BANK LIST
+  // ═══════════════════════════════════════════
+
+  async getBankList(): Promise<{ name: string; code: string }[]> {
+    const token = await this.getAccessToken();
+
+    try {
+      const response = await this.httpService.axiosRef.get(
+        `${this.baseUrl}/api/v1/banks`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      const banks = response.data?.responseBody || [];
+      return banks.map((b: any) => ({ name: b.name, code: b.code }));
+    } catch (error) {
+      this.logger.error('Monnify get banks failed:', error?.response?.data || error.message);
+      throw new BadRequestException('Failed to fetch bank list');
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  //  VALIDATE BANK ACCOUNT
+  // ═══════════════════════════════════════════
+
+  async validateBankAccount(
+    accountNumber: string,
+    bankCode: string,
+  ): Promise<{ accountNumber: string; accountName: string; bankCode: string }> {
+    const token = await this.getAccessToken();
+
+    try {
+      const response = await this.httpService.axiosRef.get(
+        `${this.baseUrl}/api/v1/disbursements/account/validate`,
+        {
+          params: { accountNumber, bankCode },
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      const body = response.data?.responseBody;
+      if (!body?.accountName) {
+        throw new BadRequestException('Could not resolve account name');
+      }
+
+      return {
+        accountNumber: body.accountNumber,
+        accountName: body.accountName,
+        bankCode: body.bankCode,
+      };
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error('Monnify validate account failed:', error?.response?.data || error.message);
+      throw new BadRequestException(
+        error?.response?.data?.responseMessage || 'Account validation failed',
+      );
+    }
+  }
+
+  // ═══════════════════════════════════════════
   //  STATUS CHECK HELPER
   // ═══════════════════════════════════════════
 
@@ -234,5 +299,77 @@ export class MonnifyService {
 
   isPaymentPending(status: string): boolean {
     return ['PENDING', 'PARTIALLY_PAID'].includes(status?.toUpperCase());
+  }
+
+  // ═══════════════════════════════════════════
+  //  GET BANK LIST
+  //  GET /api/v1/banks
+  // ═══════════════════════════════════════════
+
+  async getBankList(): Promise<{ name: string; code: string }[]> {
+    const token = await this.getAccessToken();
+
+    try {
+      const response = await this.httpService.axiosRef.get(
+        `${this.baseUrl}/api/v1/banks`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      const body = response.data;
+      if (!body?.requestSuccessful) {
+        throw new BadRequestException('Failed to fetch bank list');
+      }
+
+      // Return only name and code for each bank
+      return (body.responseBody || []).map((b: any) => ({
+        name: b.name,
+        code: b.code,
+      }));
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error('Monnify get banks failed:', error?.response?.data || error.message);
+      throw new BadRequestException('Failed to fetch bank list from payment provider');
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  //  VALIDATE BANK ACCOUNT
+  //  GET /api/v1/disbursements/account/validate?accountNumber=...&bankCode=...
+  // ═══════════════════════════════════════════
+
+  async validateBankAccount(
+    accountNumber: string,
+    bankCode: string,
+  ): Promise<{ accountNumber: string; accountName: string; bankCode: string }> {
+    const token = await this.getAccessToken();
+
+    try {
+      const response = await this.httpService.axiosRef.get(
+        `${this.baseUrl}/api/v1/disbursements/account/validate`,
+        {
+          params: { accountNumber, bankCode },
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      const body = response.data;
+      if (!body?.requestSuccessful || !body?.responseBody) {
+        throw new BadRequestException('Account validation failed');
+      }
+
+      return {
+        accountNumber: body.responseBody.accountNumber,
+        accountName: body.responseBody.accountName,
+        bankCode: body.responseBody.bankCode,
+      };
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error('Monnify validate account failed:', error?.response?.data || error.message);
+      throw new BadRequestException(
+        error?.response?.data?.responseMessage || 'Account validation failed. Please check the account number and bank.',
+      );
+    }
   }
 }

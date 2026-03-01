@@ -100,6 +100,8 @@ export class PricingService {
       cancellationFeeBeforeAccept: body.cancellationFeeBeforeAccept ?? 0,
       cancellationFeeAfterAccept: body.cancellationFeeAfterAccept ?? 0,
       cancellationFeeAfterPickupPercentage: body.cancellationFeeAfterPickupPercentage ?? 0.5,
+      riderCommissionPercentage: body.riderCommissionPercentage ?? 0.80,
+      minimumRiderPayout: body.minimumRiderPayout ?? 100,
       reschedulingFee: body.reschedulingFee ?? 0,
       isActive: true,
       effectiveFrom: body.effectiveFrom ? new Date(body.effectiveFrom) : new Date(),

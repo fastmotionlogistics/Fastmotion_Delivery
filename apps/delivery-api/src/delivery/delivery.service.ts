@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { DeliveryRequest, DeliveryRequestDocument, Rider, RiderDocument, User, UserDocument } from '@libs/database';
+import { DeliveryRequest, DeliveryRequestDocument, Rider, RiderDocument, User, UserDocument, PricingConfig, PricingConfigDocument } from '@libs/database';
 import { DeliveryStatusEnum, DeliveryTypeEnum, DeliveryPaymentStatusEnum, RiderStatusEnum } from '@libs/common';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
 import { NotificationService } from '@libs/common/modules/notification';
@@ -14,6 +14,7 @@ import {
   VerifyDeliveryPinDto,
   UpdateRiderLocationDto,
 } from './dto';
+import { EarningsService } from '../earnings/earnings.service';
 
 // ── Valid status transitions ──────────────────────────────────────────
 const VALID_TRANSITIONS: Record<string, string[]> = {
@@ -59,24 +60,46 @@ export class DeliveryService {
     private readonly riderModel: Model<RiderDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(PricingConfig.name)
+    private readonly pricingModel: Model<PricingConfigDocument>,
     private readonly gateway: DeliveryGateway,
     private readonly notificationService: NotificationService,
+    private readonly earningsService: EarningsService,
   ) {}
 
-  // Helper: push notify customer
+  // Cached commission config
+  private _commissionCache: { rate: number; min: number; ts: number } | null = null;
+
+  private async getCommissionConfig(): Promise<{ rate: number; min: number }> {
+    // Cache for 5 minutes to avoid repeated DB lookups
+    if (this._commissionCache && Date.now() - this._commissionCache.ts < 5 * 60 * 1000) {
+      return { rate: this._commissionCache.rate, min: this._commissionCache.min };
+    }
+    const config = await this.pricingModel.findOne({ isActive: true }).select('riderCommissionPercentage minimumRiderPayout').lean();
+    const rate = config?.riderCommissionPercentage ?? 0.80;
+    const min = config?.minimumRiderPayout ?? 100;
+    this._commissionCache = { rate, min, ts: Date.now() };
+    return { rate, min };
+  }
+
+  /** Calculate what the rider earns for a given total price */
+  private computeRiderPayout(totalPrice: number, rate: number, min: number): number {
+    return Math.max(Math.round(totalPrice * rate), min);
+  }
+
+  // Helper: push notify customer (persists to DB + Firebase push)
   private async pushNotifyCustomer(customerId: any, title: string, body: string, data?: Record<string, any>) {
     try {
-      const user = await this.userModel.findById(customerId).select('deviceToken').lean();
-      if (user && (user as any).deviceToken) {
-        await this.notificationService.send({
-          recipientId: customerId,
-          recipientType: NotificationRecipientType.USER,
-          title,
-          body,
-          token: (user as any).deviceToken,
-          data,
-        });
-      }
+      const user = await this.userModel.findById(customerId).select('deviceToken fcmToken').lean();
+      const token = (user as any)?.deviceToken || (user as any)?.fcmToken || undefined;
+      await this.notificationService.send({
+        recipientId: customerId,
+        recipientType: NotificationRecipientType.USER,
+        title,
+        body,
+        token,
+        data,
+      });
     } catch (_) {}
   }
 
@@ -129,10 +152,17 @@ export class DeliveryService {
         .sort((a, b) => (a as any).distanceFromRider - (b as any).distanceFromRider);
     }
 
+    // Attach riderPayout to each delivery
+    const { rate, min } = await this.getCommissionConfig();
+    const withPayout = results.map(d => ({
+      ...d,
+      riderPayout: this.computeRiderPayout(d.pricing?.totalPrice || 0, rate, min),
+    }));
+
     return {
       success: true,
       message: 'Available deliveries retrieved',
-      data: results,
+      data: withPayout,
     };
   }
 
@@ -161,10 +191,17 @@ export class DeliveryService {
       .populate('customer', 'firstName lastName phone')
       .lean();
 
+    // Attach riderPayout
+    const { rate, min } = await this.getCommissionConfig();
+    const withPayout = deliveries.map(d => ({
+      ...d,
+      riderPayout: this.computeRiderPayout(d.pricing?.totalPrice || 0, rate, min),
+    }));
+
     return {
       success: true,
       message: 'Active deliveries retrieved',
-      data: deliveries,
+      data: withPayout,
     };
   }
 
@@ -193,10 +230,17 @@ export class DeliveryService {
       this.deliveryModel.countDocuments(query),
     ]);
 
+    // Attach riderPayout
+    const { rate, min } = await this.getCommissionConfig();
+    const withPayout = data.map(d => ({
+      ...d,
+      riderPayout: this.computeRiderPayout(d.pricing?.totalPrice || 0, rate, min),
+    }));
+
     return {
       success: true,
       message: 'Delivery history retrieved',
-      data,
+      data: withPayout,
       pagination: {
         total,
         page,
@@ -231,10 +275,14 @@ export class DeliveryService {
       throw new ForbiddenException('You do not have access to this delivery');
     }
 
+    // Attach riderPayout
+    const { rate, min } = await this.getCommissionConfig();
+    const riderPayout = this.computeRiderPayout(delivery.pricing?.totalPrice || 0, rate, min);
+
     return {
       success: true,
       message: 'Delivery retrieved',
-      data: delivery,
+      data: { ...delivery, riderPayout },
     };
   }
 
@@ -317,6 +365,10 @@ export class DeliveryService {
       { type: 'rider_accepted', deliveryId: deliveryId, trackingNumber: delivery.trackingNumber },
     );
 
+    // Compute rider payout
+    const { rate, min } = await this.getCommissionConfig();
+    const riderPayout = this.computeRiderPayout(delivery.pricing.totalPrice, rate, min);
+
     return {
       success: true,
       message: 'Delivery accepted successfully',
@@ -333,6 +385,7 @@ export class DeliveryService {
           totalPrice: delivery.pricing.totalPrice,
           currency: delivery.pricing.currency,
         },
+        riderPayout,
         customer: await this.userModel.findById(delivery.customer).select('firstName lastName phone').lean(),
       },
     };
@@ -449,6 +502,39 @@ export class DeliveryService {
       this.gateway.emitDeliveryStatusUpdate(deliveryId, DeliveryStatusEnum.RIDER_ARRIVED_PICKUP, {
         paymentRequired: true,
       });
+    }
+
+    // ── Push notifications to customer for key status changes ──
+    const riderName = rider.firstName || 'Your rider';
+    const tn = delivery.trackingNumber;
+    const notifData = { type: `status_${newStatus}`, deliveryId, trackingNumber: tn };
+
+    const CUSTOMER_NOTIF_MAP: Record<string, { title: string; body: string } | null> = {
+      [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP]: {
+        title: 'Rider On The Way 🏍️',
+        body: `${riderName} is heading to the pickup location for ${tn}.`,
+      },
+      [DeliveryStatusEnum.PICKUP_IN_PROGRESS]: {
+        title: 'Pickup Started 📦',
+        body: `${riderName} is picking up your parcel (${tn}).`,
+      },
+      [DeliveryStatusEnum.PICKED_UP]: {
+        title: 'Parcel Picked Up ✅',
+        body: `Your parcel (${tn}) has been picked up and is being prepared for transit.`,
+      },
+      [DeliveryStatusEnum.IN_TRANSIT]: {
+        title: 'Package In Transit 🚀',
+        body: `Your parcel (${tn}) is on its way to the drop-off location.`,
+      },
+      [DeliveryStatusEnum.DELIVERY_IN_PROGRESS]: {
+        title: 'Almost There! 📍',
+        body: `${riderName} is delivering your parcel (${tn}). Please be ready with the delivery PIN.`,
+      },
+    };
+
+    const notif = CUSTOMER_NOTIF_MAP[newStatus];
+    if (notif) {
+      this.pushNotifyCustomer(delivery.customer, notif.title, notif.body, notifData).catch(() => {});
     }
 
     // On delivered/completed, update rider stats
@@ -628,6 +714,17 @@ export class DeliveryService {
 
     if (activeCount === 0) {
       await this.riderModel.updateOne({ _id: rider._id }, { $set: { status: RiderStatusEnum.AVAILABLE } });
+    }
+
+    // Credit rider earnings (commission applied)
+    try {
+      await this.earningsService.creditDeliveryEarnings(
+        new Types.ObjectId(rider._id as any),
+        delivery._id as Types.ObjectId,
+      );
+    } catch (e) {
+      // Log but don't fail the delivery completion
+      console.error('Failed to credit earnings:', e?.message);
     }
 
     const deliveryId = delivery._id.toString();
@@ -876,20 +973,14 @@ export class DeliveryService {
   async getTodaySummary(rider: Rider) {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
+    const riderId = new Types.ObjectId(rider._id as any);
 
-    const [completedToday, totalDistanceResult] = await Promise.all([
-      this.deliveryModel
-        .find({
-          rider: rider._id,
-          status: { $in: [DeliveryStatusEnum.DELIVERED, DeliveryStatusEnum.COMPLETED] },
-          deliveredAt: { $gte: startOfDay },
-        })
-        .select('pricing.totalPrice estimatedDistance')
-        .lean(),
+    const [deliveryStats, earningsResult] = await Promise.all([
+      // Delivery stats (count + distance)
       this.deliveryModel.aggregate([
         {
           $match: {
-            rider: new Types.ObjectId(rider._id as any),
+            rider: riderId,
             status: { $in: [DeliveryStatusEnum.DELIVERED, DeliveryStatusEnum.COMPLETED] },
             deliveredAt: { $gte: startOfDay },
           },
@@ -898,21 +989,24 @@ export class DeliveryService {
           $group: {
             _id: null,
             totalDistance: { $sum: '$estimatedDistance' },
-            totalEarnings: { $sum: '$pricing.totalPrice' },
+            count: { $sum: 1 },
           },
         },
       ]),
+      // Actual rider earnings (after commission, from earnings service)
+      this.earningsService.getTodayEarnings(rider),
     ]);
 
-    const summary = totalDistanceResult[0] || { totalDistance: 0, totalEarnings: 0 };
+    const stats = deliveryStats[0] || { totalDistance: 0, count: 0 };
+    const todayEarnings = earningsResult?.data?.totalEarnings || 0;
 
     return {
       success: true,
       message: "Today's summary retrieved",
       data: {
-        deliveriesCompleted: completedToday.length,
-        totalEarnings: summary.totalEarnings,
-        totalDistance: Math.round(summary.totalDistance * 100) / 100,
+        deliveriesCompleted: stats.count,
+        totalEarnings: todayEarnings,
+        totalDistance: Math.round(stats.totalDistance * 100) / 100,
         hoursOnline: 0, // Would need online time tracking — placeholder
         currency: 'NGN',
       },
