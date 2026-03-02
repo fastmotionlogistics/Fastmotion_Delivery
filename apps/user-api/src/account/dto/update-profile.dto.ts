@@ -66,4 +66,24 @@ export class UpdateNotificationPreferencesDto {
   @IsBoolean()
   @IsOptional()
   mobileNotification?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsBoolean()
+  @IsOptional()
+  deliveryNotification?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsBoolean()
+  @IsOptional()
+  paymentNotification?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsBoolean()
+  @IsOptional()
+  disputeNotification?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsBoolean()
+  @IsOptional()
+  promoNotification?: boolean;
 }

@@ -41,6 +41,10 @@ export class AccountService {
         isOnboardingComplete: user.isOnboardingComplete,
         emailNotification: user.emailNotification,
         mobileNotification: user.mobileNotification,
+        deliveryNotification: user.deliveryNotification,
+        paymentNotification: user.paymentNotification,
+        disputeNotification: user.disputeNotification,
+        promoNotification: user.promoNotification,
         latitude: user.latitude,
         longitude: user.longitude,
         createdAt: (user as any).createdAt,
@@ -116,6 +120,10 @@ export class AccountService {
     const updateData: Record<string, any> = {};
     if (body.emailNotification !== undefined) updateData.emailNotification = body.emailNotification;
     if (body.mobileNotification !== undefined) updateData.mobileNotification = body.mobileNotification;
+    if (body.deliveryNotification !== undefined) updateData.deliveryNotification = body.deliveryNotification;
+    if (body.paymentNotification !== undefined) updateData.paymentNotification = body.paymentNotification;
+    if (body.disputeNotification !== undefined) updateData.disputeNotification = body.disputeNotification;
+    if (body.promoNotification !== undefined) updateData.promoNotification = body.promoNotification;
 
     await this.userRepository.model.findOneAndUpdate(
       { _id: userId },
@@ -129,6 +137,10 @@ export class AccountService {
       data: {
         emailNotification: body.emailNotification ?? user.emailNotification,
         mobileNotification: body.mobileNotification ?? user.mobileNotification,
+        deliveryNotification: body.deliveryNotification ?? user.deliveryNotification,
+        paymentNotification: body.paymentNotification ?? user.paymentNotification,
+        disputeNotification: body.disputeNotification ?? user.disputeNotification,
+        promoNotification: body.promoNotification ?? user.promoNotification,
       },
     };
   }

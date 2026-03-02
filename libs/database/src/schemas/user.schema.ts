@@ -252,6 +252,34 @@ export class User extends AbstractDocument {
   @ApiProperty()
   @Prop({
     type: Boolean,
+    default: true,
+  })
+  deliveryNotification?: boolean;
+
+  @ApiProperty()
+  @Prop({
+    type: Boolean,
+    default: true,
+  })
+  paymentNotification?: boolean;
+
+  @ApiProperty()
+  @Prop({
+    type: Boolean,
+    default: true,
+  })
+  disputeNotification?: boolean;
+
+  @ApiProperty()
+  @Prop({
+    type: Boolean,
+    default: true,
+  })
+  promoNotification?: boolean;
+
+  @ApiProperty()
+  @Prop({
+    type: Boolean,
     default: false,
   })
   isSocialLogin?: boolean;
