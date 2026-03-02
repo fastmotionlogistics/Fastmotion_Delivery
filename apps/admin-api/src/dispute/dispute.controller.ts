@@ -1,13 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { AdminDisputeService } from './dispute.service';
 import { UpdateDisputeStatusDto, AddAdminMessageDto, AssignDisputeDto } from './dto';
@@ -47,20 +38,14 @@ export class AdminDisputeController {
   @ApiOperation({ summary: 'Update dispute status (in_review, resolved, closed, escalated)' })
   @ApiBody({ type: UpdateDisputeStatusDto })
   @Patch('status')
-  async updateDisputeStatus(
-    @CurrentAdmin() admin: any,
-    @Body() body: UpdateDisputeStatusDto,
-  ) {
+  async updateDisputeStatus(@CurrentAdmin() admin: any, @Body() body: UpdateDisputeStatusDto) {
     return this.disputeService.updateDisputeStatus(admin._id.toString(), body);
   }
 
   @ApiOperation({ summary: 'Add admin message to dispute' })
   @ApiBody({ type: AddAdminMessageDto })
   @Post('message')
-  async addAdminMessage(
-    @CurrentAdmin() admin: any,
-    @Body() body: AddAdminMessageDto,
-  ) {
+  async addAdminMessage(@CurrentAdmin() admin: any, @Body() body: AddAdminMessageDto) {
     return this.disputeService.addAdminMessage(admin._id.toString(), body);
   }
 

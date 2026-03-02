@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsArray, IsBoolean, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, IsArray, IsBoolean, MaxLength, IsNumber } from 'class-validator';
 import { DisputeStatusEnum } from '@libs/common';
 
 export class UpdateDisputeStatusDto {
@@ -54,4 +54,59 @@ export class AssignDisputeDto {
   @IsString()
   @IsNotEmpty()
   adminId: string;
+}
+
+export class AdminDisputeMessageDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  message: string;
+
+  @ApiPropertyOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  attachments?: string[];
+}
+
+export class ApproveRefundDto {
+  @ApiProperty()
+  @IsBoolean()
+  approved: boolean;
+
+  @ApiPropertyOptional()
+  @IsNumber()
+  @IsOptional()
+  amount?: number; // partial refund amount
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  reason?: string;
+}
+
+export class DisputeFilterDto {
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  status?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  priority?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  reason?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  page?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  limit?: number;
 }

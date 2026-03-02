@@ -92,18 +92,13 @@ export class MonnifyService {
   private cachedToken: string | null = null;
   private tokenExpiresAt: number = 0;
 
-  constructor(
-    private readonly httpService: HttpService,
-    private readonly configService: ConfigService,
-  ) {
+  constructor(private readonly httpService: HttpService, private readonly configService: ConfigService) {
     this.apiKey = this.configService.getOrThrow('MONNIFY_WALLET_API_KEY');
     this.secretKey = this.configService.getOrThrow('MONNIFY_WALLET_SECRET_KEY');
     this.contractCode = this.configService.getOrThrow('MONNIFY_WALLET_CONTRACT_CODE');
 
     // Use sandbox for test keys, live for live keys
-    this.baseUrl = this.apiKey.startsWith('MK_TEST')
-      ? MONNIFY_URLS.BASE_SANDBOX
-      : MONNIFY_URLS.BASE_LIVE;
+    this.baseUrl = this.apiKey.startsWith('MK_TEST') ? MONNIFY_URLS.BASE_SANDBOX : MONNIFY_URLS.BASE_LIVE;
   }
 
   // ═══════════════════════════════════════════
@@ -162,23 +157,17 @@ export class MonnifyService {
     };
 
     try {
-      const response = await this.httpService.axiosRef.post(
-        `${this.baseUrl}${MONNIFY_URLS.INIT_PAYMENT}`,
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+      const response = await this.httpService.axiosRef.post(`${this.baseUrl}${MONNIFY_URLS.INIT_PAYMENT}`, payload, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
-      );
+      });
 
       return response.data as MonnifyInitPaymentResult;
     } catch (error) {
       this.logger.error('Monnify init payment failed:', error?.response?.data || error.message);
-      throw new BadRequestException(
-        error?.response?.data?.responseMessage || 'Payment initialization failed',
-      );
+      throw new BadRequestException(error?.response?.data?.responseMessage || 'Payment initialization failed');
     }
   }
 
@@ -212,10 +201,7 @@ export class MonnifyService {
   // ═══════════════════════════════════════════
 
   verifyWebhookSignature(payload: any, signature: string): boolean {
-    const computedHash = crypto
-      .createHmac('sha512', this.secretKey)
-      .update(JSON.stringify(payload))
-      .digest('hex');
+    const computedHash = crypto.createHmac('sha512', this.secretKey).update(JSON.stringify(payload)).digest('hex');
 
     return computedHash === signature;
   }
@@ -228,14 +214,11 @@ export class MonnifyService {
     const token = await this.getAccessToken();
 
     try {
-      const response = await this.httpService.axiosRef.get(
-        `${this.baseUrl}/api/v1/banks`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+      const response = await this.httpService.axiosRef.get(`${this.baseUrl}/api/v1/banks`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
         },
-      );
+      });
 
       const banks = response.data?.responseBody || [];
       return banks.map((b: any) => ({ name: b.name, code: b.code }));
@@ -249,41 +232,41 @@ export class MonnifyService {
   //  VALIDATE BANK ACCOUNT
   // ═══════════════════════════════════════════
 
-  async validateBankAccount(
-    accountNumber: string,
-    bankCode: string,
-  ): Promise<{ accountNumber: string; accountName: string; bankCode: string }> {
-    const token = await this.getAccessToken();
+  // async validateBankAccount(
+  //   accountNumber: string,
+  //   bankCode: string,
+  // ): Promise<{ accountNumber: string; accountName: string; bankCode: string }> {
+  //   const token = await this.getAccessToken();
 
-    try {
-      const response = await this.httpService.axiosRef.get(
-        `${this.baseUrl}/api/v1/disbursements/account/validate`,
-        {
-          params: { accountNumber, bankCode },
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      );
+  //   try {
+  //     const response = await this.httpService.axiosRef.get(
+  //       `${this.baseUrl}/api/v1/disbursements/account/validate`,
+  //       {
+  //         params: { accountNumber, bankCode },
+  //         headers: {
+  //           Authorization: `Bearer ${token}`,
+  //         },
+  //       },
+  //     );
 
-      const body = response.data?.responseBody;
-      if (!body?.accountName) {
-        throw new BadRequestException('Could not resolve account name');
-      }
+  //     const body = response.data?.responseBody;
+  //     if (!body?.accountName) {
+  //       throw new BadRequestException('Could not resolve account name');
+  //     }
 
-      return {
-        accountNumber: body.accountNumber,
-        accountName: body.accountName,
-        bankCode: body.bankCode,
-      };
-    } catch (error) {
-      if (error instanceof BadRequestException) throw error;
-      this.logger.error('Monnify validate account failed:', error?.response?.data || error.message);
-      throw new BadRequestException(
-        error?.response?.data?.responseMessage || 'Account validation failed',
-      );
-    }
-  }
+  //     return {
+  //       accountNumber: body.accountNumber,
+  //       accountName: body.accountName,
+  //       bankCode: body.bankCode,
+  //     };
+  //   } catch (error) {
+  //     if (error instanceof BadRequestException) throw error;
+  //     this.logger.error('Monnify validate account failed:', error?.response?.data || error.message);
+  //     throw new BadRequestException(
+  //       error?.response?.data?.responseMessage || 'Account validation failed',
+  //     );
+  //   }
+  // }
 
   // ═══════════════════════════════════════════
   //  STATUS CHECK HELPER
@@ -306,33 +289,33 @@ export class MonnifyService {
   //  GET /api/v1/banks
   // ═══════════════════════════════════════════
 
-  async getBankList(): Promise<{ name: string; code: string }[]> {
-    const token = await this.getAccessToken();
+  // async getBankList(): Promise<{ name: string; code: string }[]> {
+  //   const token = await this.getAccessToken();
 
-    try {
-      const response = await this.httpService.axiosRef.get(
-        `${this.baseUrl}/api/v1/banks`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
+  //   try {
+  //     const response = await this.httpService.axiosRef.get(
+  //       `${this.baseUrl}/api/v1/banks`,
+  //       {
+  //         headers: { Authorization: `Bearer ${token}` },
+  //       },
+  //     );
 
-      const body = response.data;
-      if (!body?.requestSuccessful) {
-        throw new BadRequestException('Failed to fetch bank list');
-      }
+  //     const body = response.data;
+  //     if (!body?.requestSuccessful) {
+  //       throw new BadRequestException('Failed to fetch bank list');
+  //     }
 
-      // Return only name and code for each bank
-      return (body.responseBody || []).map((b: any) => ({
-        name: b.name,
-        code: b.code,
-      }));
-    } catch (error) {
-      if (error instanceof BadRequestException) throw error;
-      this.logger.error('Monnify get banks failed:', error?.response?.data || error.message);
-      throw new BadRequestException('Failed to fetch bank list from payment provider');
-    }
-  }
+  //     // Return only name and code for each bank
+  //     return (body.responseBody || []).map((b: any) => ({
+  //       name: b.name,
+  //       code: b.code,
+  //     }));
+  //   } catch (error) {
+  //     if (error instanceof BadRequestException) throw error;
+  //     this.logger.error('Monnify get banks failed:', error?.response?.data || error.message);
+  //     throw new BadRequestException('Failed to fetch bank list from payment provider');
+  //   }
+  // }
 
   // ═══════════════════════════════════════════
   //  VALIDATE BANK ACCOUNT
@@ -346,13 +329,10 @@ export class MonnifyService {
     const token = await this.getAccessToken();
 
     try {
-      const response = await this.httpService.axiosRef.get(
-        `${this.baseUrl}/api/v1/disbursements/account/validate`,
-        {
-          params: { accountNumber, bankCode },
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
+      const response = await this.httpService.axiosRef.get(`${this.baseUrl}/api/v1/disbursements/account/validate`, {
+        params: { accountNumber, bankCode },
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
       const body = response.data;
       if (!body?.requestSuccessful || !body?.responseBody) {
@@ -368,7 +348,8 @@ export class MonnifyService {
       if (error instanceof BadRequestException) throw error;
       this.logger.error('Monnify validate account failed:', error?.response?.data || error.message);
       throw new BadRequestException(
-        error?.response?.data?.responseMessage || 'Account validation failed. Please check the account number and bank.',
+        error?.response?.data?.responseMessage ||
+          'Account validation failed. Please check the account number and bank.',
       );
     }
   }
