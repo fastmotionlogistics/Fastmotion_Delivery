@@ -20,7 +20,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'rider-jwt') {
   }
 
   async validate(payload: any) {
-    const rider = await this.riderModel.findById(payload.rider_id);
+    const rider = await this.riderModel
+      .findById(payload.rider_id)
+      .select('+mustChangePassword +boundDeviceId');
 
     if (!rider) {
       throw new UnauthorizedException('Rider not found');

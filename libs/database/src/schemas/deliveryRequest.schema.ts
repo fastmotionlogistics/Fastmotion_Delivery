@@ -126,6 +126,10 @@ export class PricingDetails {
 
   @Prop({ type: Number, default: 1.0 })
   deliveryTypeMultiplier: number;
+
+  // Rider earnings for this delivery
+  @Prop({ type: Number, default: 0 })
+  riderEarnings: number;
 }
 
 // Embedded schema for rescheduling history

@@ -1233,6 +1233,12 @@ export class DeliveryService {
 
     const totalPrice = subtotal + serviceFee - discountAmount;
 
+    // Rider earnings = rider commission percentage of totalPrice (matching delivery-api computeRiderPayout)
+    const riderCommission = config.riderCommissionPercentage || 0.80;
+    const riderEarnings = Math.round(totalPrice * riderCommission);
+    const minimumPayout = config.minimumRiderPayout || 100;
+    const finalRiderEarnings = Math.max(riderEarnings, minimumPayout);
+
     return {
       estimatedDistance: Math.round(distance * 100) / 100,
       estimatedDuration: duration,
@@ -1266,6 +1272,7 @@ export class DeliveryService {
         sizeMultiplier,
         categoryMultiplier,
         deliveryTypeMultiplier,
+        riderEarnings: finalRiderEarnings,
       },
     };
   }

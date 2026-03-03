@@ -180,7 +180,7 @@ export class RiderManagementService {
         'driversLicense nationalId vehicleRegistration vehicleInsurance ' +
         'status verificationStatus isActive isOnline isEmailConfirmed isPhoneConfirmed ' +
         'totalDeliveries totalEarnings walletBalance averageRating totalRatings ' +
-        'enforceDeviceBinding mustChangePassword boundDeviceModel deviceBoundAt ' +
+        'enforceDeviceBinding +mustChangePassword +boundDeviceId boundDeviceModel deviceBoundAt ' +
         'isVehicleBound boundVehicleId vehicleBoundAt ' +
         'assignedZones canAcceptOutsideZone allowContactSharing ' +
         'isSuspended suspensionReason suspendedAt ' +

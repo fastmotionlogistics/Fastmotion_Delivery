@@ -182,6 +182,67 @@ export class AdminNotificationService {
   }
 
   // ═══════════════════════════════════════════════
+  //  SEARCH RECIPIENTS
+  // ═══════════════════════════════════════════════
+
+  async searchRecipients(targetType: string, search: string) {
+    const regex = { $regex: search, $options: 'i' };
+
+    if (targetType === 'rider') {
+      const riders = await this.riderModel
+        .find({
+          $or: [
+            { firstName: regex },
+            { lastName: regex },
+            { email: regex },
+            { phone: regex },
+          ],
+        })
+        .select('firstName lastName email phone isActive isOnline')
+        .sort({ firstName: 1 })
+        .limit(20)
+        .lean();
+
+      return {
+        success: true,
+        data: riders.map((r: any) => ({
+          id: r._id,
+          name: `${r.firstName} ${r.lastName}`,
+          email: r.email,
+          phone: r.phone,
+          isActive: r.isActive,
+          isOnline: r.isOnline,
+        })),
+      };
+    }
+
+    // Users
+    const users = await this.userModel
+      .find({
+        $or: [
+          { firstName: regex },
+          { lastName: regex },
+          { email: regex },
+          { phone: regex },
+        ],
+      })
+      .select('firstName lastName email phone')
+      .sort({ firstName: 1 })
+      .limit(20)
+      .lean();
+
+    return {
+      success: true,
+      data: users.map((u: any) => ({
+        id: u._id,
+        name: `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email,
+        email: u.email,
+        phone: u.phone,
+      })),
+    };
+  }
+
+  // ═══════════════════════════════════════════════
   //  HELPERS
   // ═══════════════════════════════════════════════
 

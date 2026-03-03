@@ -49,4 +49,14 @@ export class AdminNotificationController {
   async getNotificationHistory(@Query() filters: NotificationFilterDto) {
     return this.notifService.getNotificationHistory(filters);
   }
+
+  @ApiOperation({ summary: 'Search users/riders for notification recipient' })
+  @RequirePermissions(AdminPermissionEnum.DELIVERY_VIEW)
+  @Get('search-recipients')
+  async searchRecipients(
+    @Query('targetType') targetType: string,
+    @Query('search') search: string,
+  ) {
+    return this.notifService.searchRecipients(targetType || 'user', search || '');
+  }
 }
