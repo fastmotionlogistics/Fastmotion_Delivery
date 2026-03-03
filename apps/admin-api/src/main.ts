@@ -11,7 +11,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AdminModule);
 
   app.enableCors({
-    origin: ['https://celebratedboy.netlify.app', 'http://localhost:5173', 'http://localhost:5174'],
+    origin: ['https://famoadmin.netlify.app', 'http://localhost:5173', 'http://localhost:5174'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
