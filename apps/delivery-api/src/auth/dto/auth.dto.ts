@@ -51,6 +51,34 @@ export class VerifyBikeDto {
   vehiclePlateNumber?: string;
 }
 
+// ── Change Password (first login) ────────────────────────
+export class ChangePasswordDto {
+  @ApiProperty({ example: 'NewSecurePassword@123' })
+  @IsStrongPassword()
+  @MinLength(8)
+  newPassword: string;
+
+  @ApiProperty({ example: 'NewSecurePassword@123' })
+  @IsString()
+  @IsNotEmpty()
+  confirmPassword: string;
+
+  @ApiPropertyOptional({ example: 'a1b2c3d4-e5f6-7890', description: 'Unique device identifier for device binding' })
+  @IsString()
+  @IsOptional()
+  deviceId?: string;
+
+  @ApiPropertyOptional({ example: 'Samsung Galaxy S24', description: 'Device model name' })
+  @IsString()
+  @IsOptional()
+  deviceModel?: string;
+
+  @ApiPropertyOptional({ example: 'fcm_token_here' })
+  @IsString()
+  @IsOptional()
+  fcmToken?: string;
+}
+
 // ── Forgot Password ──────────────────────────────────────
 export class ForgotPasswordDto {
   @ApiProperty({ example: 'rider@fastmotion.com', description: 'Email or phone to receive OTP' })

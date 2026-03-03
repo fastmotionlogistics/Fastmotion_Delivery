@@ -13,6 +13,8 @@ import {
   PaymentSchema,
   Dispute,
   DisputeSchema,
+  Rating,
+  RatingSchema,
 } from '@libs/database';
 import { NotificationModule } from '@libs/common/modules/notification';
 
@@ -23,6 +25,7 @@ import { NotificationModule } from '@libs/common/modules/notification';
       { name: Rider.name, schema: RiderSchema },
       { name: User.name, schema: UserSchema },
       { name: Payment.name, schema: PaymentSchema },
+      { name: Rating.name, schema: RatingSchema },
       { name: Dispute.name, schema: DisputeSchema },
     ]),
     NotificationModule,

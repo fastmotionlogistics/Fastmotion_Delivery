@@ -9,6 +9,7 @@ import { ApiBearerAuth, ApiBody, ApiTags, ApiOperation } from '@nestjs/swagger';
 import {
   LoginRiderDto,
   VerifyBikeDto,
+  ChangePasswordDto,
   ForgotPasswordDto,
   ResetPasswordDto,
   LogoutDto,
@@ -39,6 +40,15 @@ export class AuthController {
   @Post('verify-bike')
   async verifyBike(@CurrentRider() rider: Rider, @Body() body: VerifyBikeDto) {
     return await this.authService.verifyBike(rider, body);
+  }
+
+  @ApiOperation({ summary: 'Change password (first login — required before full access)' })
+  @ApiBody({ type: ChangePasswordDto })
+  @UseGuards(RiderJwtAuthGuard)
+  @ApiBearerAuth()
+  @Post('change-password')
+  async changePassword(@CurrentRider() rider: Rider, @Body() body: ChangePasswordDto) {
+    return await this.authService.changePassword(rider, body);
   }
 
   @ApiOperation({ summary: 'Forgot password — send OTP' })

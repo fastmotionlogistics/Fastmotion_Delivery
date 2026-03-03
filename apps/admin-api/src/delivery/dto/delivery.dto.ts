@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEnum, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import { DeliveryStatusEnum } from '@libs/common';
 
 export class AssignRiderDto {
@@ -153,10 +154,12 @@ export class DeliveryFilterDto {
   @ApiPropertyOptional()
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   page?: number;
 
   @ApiPropertyOptional()
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   limit?: number;
 }

@@ -16,6 +16,7 @@ import { RiderManagementModule } from './rider-management/rider-management.modul
 import { CatalogModule } from './catalog/catalog.module';
 import { AdminDisputeModule } from './dispute/dispute.module';
 import { AdminAppVersionModule } from './app-version/app-version.module';
+import { AdminNotificationModule } from './notification/notification.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { AdminAppVersionModule } from './app-version/app-version.module';
     CatalogModule,
     AdminDisputeModule,
     AdminAppVersionModule,
+    AdminNotificationModule,
   ],
   providers: [ShutdownService],
 })

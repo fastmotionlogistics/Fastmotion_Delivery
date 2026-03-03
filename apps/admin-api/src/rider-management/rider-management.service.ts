@@ -10,7 +10,7 @@ import * as bcrypt from 'bcryptjs';
 import { Rider, RiderDocument, Admin } from '@libs/database';
 import { RiderVerificationStatusEnum, RiderStatusEnum } from '@libs/common';
 import { NotificationService } from '@libs/common/modules/notification';
-import { NotificationRecipientType } from '@libs/database';
+import { NotificationRecipientType, NotificationChannel } from '@libs/database';
 import {
   CreateRiderDto,
   UpdateRiderDto,
@@ -85,11 +85,28 @@ export class RiderManagementService {
       status: RiderStatusEnum.OFFLINE,
       isActive: true,
       isOnline: false,
+      mustChangePassword: true,
     });
+
+    // Send account details email to rider
+    try {
+      const emailBody = `Welcome to FastMotion, ${rider.firstName}!\n\nYour rider account has been created. Here are your login credentials:\n\nEmail: ${rider.email}\nPhone: ${rider.phone}\nTemporary Password: ${body.password}\n\n⚠️ You will be required to change your password when you first log in.\n\nDownload the FastMotion Rider app and sign in to get started.`;
+
+      await this.notificationService.send({
+        recipientId: rider._id,
+        recipientType: NotificationRecipientType.RIDER,
+        title: 'FastMotion — Your Rider Account Has Been Created',
+        body: emailBody,
+        channels: [NotificationChannel.EMAIL],
+        email: rider.email,
+      });
+    } catch (emailErr) {
+      console.log('[RiderManagement] Failed to send rider welcome email:', emailErr?.message);
+    }
 
     return {
       success: true,
-      message: 'Rider account created successfully',
+      message: 'Rider account created successfully. Login credentials sent to their email.',
       data: {
         id: rider._id,
         firstName: rider.firstName,
@@ -128,7 +145,13 @@ export class RiderManagementService {
     const [data, total] = await Promise.all([
       this.riderModel
         .find(query)
-        .select('-passwordHash -passwordSalt -resetPasswordOtp -resetPasswordOtpExpiry -boundDeviceId')
+        .select(
+          'firstName lastName email phone gender vehicleType vehiclePlateNumber vehicleModel vehicleColor ' +
+          'status verificationStatus isActive isOnline isSuspended suspensionReason ' +
+          'totalDeliveries totalEarnings averageRating totalRatings ' +
+          'maxConcurrentDeliveries currentDeliveryCount enforceDeviceBinding mustChangePassword ' +
+          'lastLoginDate createdAt updatedAt'
+        )
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
@@ -151,8 +174,19 @@ export class RiderManagementService {
   async getRiderById(id: string) {
     const rider = await this.riderModel
       .findById(id)
-      .select('-passwordHash -passwordSalt -resetPasswordOtp -resetPasswordOtpExpiry')
-      .select('+boundDeviceId')
+      .select(
+        'firstName lastName email phone gender dob profilePhoto address city state ' +
+        'vehicleType vehiclePlateNumber vehicleModel vehicleColor ' +
+        'driversLicense nationalId vehicleRegistration vehicleInsurance ' +
+        'status verificationStatus isActive isOnline isEmailConfirmed isPhoneConfirmed ' +
+        'totalDeliveries totalEarnings walletBalance averageRating totalRatings ' +
+        'enforceDeviceBinding mustChangePassword boundDeviceModel deviceBoundAt ' +
+        'isVehicleBound boundVehicleId vehicleBoundAt ' +
+        'assignedZones canAcceptOutsideZone allowContactSharing ' +
+        'isSuspended suspensionReason suspendedAt ' +
+        'maxConcurrentDeliveries currentDeliveryCount ' +
+        'lastLoginDate createdAt updatedAt'
+      )
       .lean();
 
     if (!rider) throw new NotFoundException('Rider not found');
@@ -283,10 +317,19 @@ export class RiderManagementService {
 
     await this.riderModel.updateOne(
       { _id: id },
-      { $set: { passwordHash: hash, passwordSalt: salt } },
+      {
+        $set: {
+          passwordHash: hash,
+          passwordSalt: salt,
+          mustChangePassword: true,
+          boundDeviceId: null,
+          boundDeviceModel: null,
+          deviceBoundAt: null,
+        },
+      },
     );
 
-    return { success: true, message: 'Rider password reset successfully' };
+    return { success: true, message: 'Rider password reset successfully. They will be required to change it on next login.' };
   }
 
   // ════════════════════════════════════════════
@@ -324,6 +367,40 @@ export class RiderManagementService {
       );
       return { success: true, message: 'Device unbound. Rider can log in from any device next time.' };
     }
+  }
+
+  // ════════════════════════════════════════════
+  //  SEARCH RIDERS (lightweight for assignment picker)
+  // ════════════════════════════════════════════
+
+  async searchRidersForAssignment(search?: string) {
+    const query: any = {
+      verificationStatus: RiderVerificationStatusEnum.VERIFIED,
+      isActive: true,
+      isSuspended: { $ne: true },
+    };
+
+    if (search) {
+      query.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } },
+        { vehiclePlateNumber: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const riders = await this.riderModel
+      .find(query)
+      .select('firstName lastName phone vehicleType vehiclePlateNumber isOnline status maxConcurrentDeliveries currentDeliveryCount')
+      .sort({ isOnline: -1, firstName: 1 })
+      .limit(20)
+      .lean();
+
+    return {
+      success: true,
+      message: 'Riders retrieved',
+      data: riders,
+    };
   }
 
   // ════════════════════════════════════════════

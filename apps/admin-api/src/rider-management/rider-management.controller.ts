@@ -56,6 +56,13 @@ export class RiderManagementController {
     return await this.riderService.getRiderStats();
   }
 
+  @ApiOperation({ summary: 'Search verified riders for assignment' })
+  @RequirePermissions(AdminPermissionEnum.RIDER_VIEW)
+  @Get('search')
+  async searchRiders(@Query('search') search?: string) {
+    return await this.riderService.searchRidersForAssignment(search);
+  }
+
   @ApiOperation({ summary: 'Get rider by ID' })
   @RequirePermissions(AdminPermissionEnum.RIDER_VIEW)
   @Get(':id')

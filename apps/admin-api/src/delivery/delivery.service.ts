@@ -357,6 +357,11 @@ export class DeliveryService {
     const delivery = await this.deliveryModel.findById(body.deliveryId);
     if (!delivery) throw new NotFoundException('Delivery not found');
 
+    const terminalStatuses = [DeliveryStatusEnum.COMPLETED, DeliveryStatusEnum.CANCELLED, DeliveryStatusEnum.FAILED as any];
+    if (terminalStatuses.includes(delivery.status as DeliveryStatusEnum)) {
+      throw new BadRequestException(`Cannot override PIN for a ${delivery.status} delivery`);
+    }
+
     if (body.pinType === 'pickup') {
       delivery.pickupPinVerified = true;
       delivery.pickupPinOverridden = true;
@@ -481,8 +486,8 @@ export class DeliveryService {
     const delivery = await this.deliveryModel.findById(body.deliveryId);
     if (!delivery) throw new NotFoundException('Delivery not found');
 
-    if ([DeliveryStatusEnum.COMPLETED, DeliveryStatusEnum.CANCELLED].includes(delivery.status as DeliveryStatusEnum)) {
-      throw new BadRequestException('Cannot adjust price for completed or cancelled delivery');
+    if ([DeliveryStatusEnum.COMPLETED, DeliveryStatusEnum.CANCELLED, DeliveryStatusEnum.FAILED as any].includes(delivery.status as DeliveryStatusEnum)) {
+      throw new BadRequestException('Cannot adjust price for a completed, cancelled, or failed delivery');
     }
 
     const previousPrice = delivery.pricing.totalPrice;

@@ -14,6 +14,7 @@ import {
   Min,
   Max,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { VehicleTypeEnum } from '@libs/common';
 
 // ── Create Rider (admin only) ────────────────────────────
@@ -155,6 +156,6 @@ export class RiderFilterDto {
   @ApiPropertyOptional() @IsString() @IsOptional() verificationStatus?: string;
   @ApiPropertyOptional() @IsString() @IsOptional() search?: string;
   @ApiPropertyOptional() @IsOptional() isOnline?: boolean;
-  @ApiPropertyOptional() @IsNumber() @IsOptional() page?: number;
-  @ApiPropertyOptional() @IsNumber() @IsOptional() limit?: number;
+  @ApiPropertyOptional() @IsNumber() @IsOptional() @Type(() => Number) page?: number;
+  @ApiPropertyOptional() @IsNumber() @IsOptional() @Type(() => Number) limit?: number;
 }

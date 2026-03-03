@@ -232,6 +232,10 @@ export class Rider extends AbstractDocument {
   @Prop({ type: Boolean, default: true })
   enforceDeviceBinding: boolean;
 
+  @ApiProperty({ description: 'Whether rider must change password on first login' })
+  @Prop({ type: Boolean, default: false })
+  mustChangePassword: boolean;
+
   // Bike/Vehicle Binding (security - account tied to specific vehicle)
   @ApiProperty({ description: 'Whether this account is bound to a specific vehicle' })
   @Prop({ type: Boolean, default: false })

@@ -14,6 +14,7 @@ import { JwtTokenService } from './strategies/jwt.service';
 import {
   LoginRiderDto,
   VerifyBikeDto,
+  ChangePasswordDto,
   ForgotPasswordDto,
   ResetPasswordDto,
   LogoutDto,
@@ -42,7 +43,31 @@ export class AuthService {
       throw new ForbiddenException(`Your account is suspended. Reason: ${rider.suspensionReason || 'Contact admin'}`);
     }
 
-    // 3. Enforce device binding — only the registered device can log in
+    // 3. First-time login — must change password before full access
+    if (rider.mustChangePassword) {
+      // Generate a short-lived token so the change-password endpoint is authenticated
+      const tempToken = this.jwtTokenService.generateAccessToken({
+        rider_id: rider._id,
+        email: rider.email,
+      });
+
+      return {
+        success: true,
+        message: 'Password change required. Please set a new password to continue.',
+        data: {
+          mustChangePassword: true,
+          tempAccessToken: tempToken,
+          rider: {
+            id: rider._id,
+            firstName: rider.firstName,
+            lastName: rider.lastName,
+            email: rider.email,
+          },
+        },
+      };
+    }
+
+    // 4. Enforce device binding — only the registered device can log in
     if (rider.enforceDeviceBinding && rider.boundDeviceId) {
       if (!body.deviceId) {
         throw new BadRequestException('Device identification is required');
@@ -52,20 +77,6 @@ export class AuthService {
           'This account is bound to a different device. Only the registered device can sign in. Contact admin if you need to change devices.',
         );
       }
-    }
-
-    // 4. First-time login — bind device if not yet bound and deviceId is provided
-    if (rider.enforceDeviceBinding && !rider.boundDeviceId && body.deviceId) {
-      await this.riderModel.updateOne(
-        { _id: rider._id },
-        {
-          $set: {
-            boundDeviceId: body.deviceId,
-            boundDeviceModel: body.deviceModel || null,
-            deviceBoundAt: new Date(),
-          },
-        },
-      );
     }
 
     // 5. Generate tokens
@@ -151,6 +162,83 @@ export class AuthService {
         bikeId: body.bikeId.toUpperCase(),
         vehiclePlateNumber: body.vehiclePlateNumber || rider.vehiclePlateNumber,
         verified: true,
+      },
+    };
+  }
+
+  // ════════════════════════════════════════════
+  //  CHANGE PASSWORD (first login)
+  // ════════════════════════════════════════════
+
+  async changePassword(rider: Rider, body: ChangePasswordDto) {
+    if (body.newPassword !== body.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
+    if (!rider.mustChangePassword) {
+      throw new BadRequestException('Password change is not required for this account.');
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt();
+    const hash = await bcrypt.hash(body.newPassword, salt);
+
+    // Build update: new password + clear flag + bind device
+    const updateFields: any = {
+      passwordHash: hash,
+      passwordSalt: salt,
+      mustChangePassword: false,
+    };
+
+    // Bind device during password change
+    if (body.deviceId) {
+      updateFields.boundDeviceId = body.deviceId;
+      updateFields.boundDeviceModel = body.deviceModel || null;
+      updateFields.deviceBoundAt = new Date();
+    }
+
+    // Save FCM token
+    if (body.fcmToken) {
+      updateFields.fcmToken = body.fcmToken;
+    }
+
+    await this.riderModel.updateOne({ _id: rider._id }, { $set: updateFields });
+
+    // Generate full session tokens
+    const refreshToken = await this.generateRefreshToken(rider);
+    const accessToken = this.jwtTokenService.generateAccessToken({
+      rider_id: rider._id,
+      email: rider.email,
+    });
+
+    // Update last login
+    await this.riderModel.updateOne(
+      { _id: rider._id },
+      { $set: { lastLoginDate: new Date() } },
+    );
+
+    return {
+      success: true,
+      message: 'Password changed successfully. Welcome aboard!',
+      data: {
+        accessToken,
+        refreshToken,
+        rider: {
+          id: rider._id,
+          firstName: rider.firstName,
+          lastName: rider.lastName,
+          email: rider.email,
+          phone: rider.phone,
+          profilePhoto: rider.profilePhoto,
+          vehicleType: rider.vehicleType,
+          vehiclePlateNumber: rider.vehiclePlateNumber,
+          verificationStatus: rider.verificationStatus,
+          isVehicleBound: rider.isVehicleBound,
+          boundVehicleId: rider.boundVehicleId,
+          isOnline: rider.isOnline,
+          status: rider.status,
+        },
+        requiresBikeVerification: !rider.isVehicleBound || !rider.boundVehicleId,
       },
     };
   }
@@ -286,7 +374,7 @@ export class AuthService {
 
     const rider = await this.riderModel
       .findOne(query)
-      .select('+passwordHash +passwordSalt +boundDeviceId');
+      .select('+passwordHash +passwordSalt +boundDeviceId +mustChangePassword');
 
     if (!rider) return null;
 
