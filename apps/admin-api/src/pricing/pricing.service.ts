@@ -18,6 +18,9 @@ import {
   TimePricing,
   TimePricingDocument,
   TimePricingStatusEnum,
+  AuditLog,
+  AuditLogDocument,
+  AuditCategoryEnum,
 } from '@libs/database';
 import {
   CreatePricingConfigDto,
@@ -41,6 +44,8 @@ export class PricingService {
     private readonly weightPricingModel: Model<WeightPricingDocument>,
     @InjectModel(TimePricing.name)
     private readonly timePricingModel: Model<TimePricingDocument>,
+    @InjectModel(AuditLog.name)
+    private readonly auditLogModel: Model<AuditLogDocument>,
   ) {}
 
   // ═══════════════════════════════════════════════
@@ -102,6 +107,7 @@ export class PricingService {
       cancellationFeeAfterPickupPercentage: body.cancellationFeeAfterPickupPercentage ?? 0.5,
       riderCommissionPercentage: body.riderCommissionPercentage ?? 0.80,
       minimumRiderPayout: body.minimumRiderPayout ?? 100,
+      fctDevelopmentLevy: body.fctDevelopmentLevy ?? 0,
       reschedulingFee: body.reschedulingFee ?? 0,
       isActive: true,
       effectiveFrom: body.effectiveFrom ? new Date(body.effectiveFrom) : new Date(),
@@ -432,6 +438,39 @@ export class PricingService {
   }
 
   // ═══════════════════════════════════════════════
+  //  PRICING CHANGE HISTORY
+  // ═══════════════════════════════════════════════
+
+  async getPricingChangeHistory(query: { page?: number; limit?: number }) {
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(50, Math.max(1, query.limit || 20));
+    const skip = (page - 1) * limit;
+
+    const filter = {
+      category: { $in: [AuditCategoryEnum.PRICING, AuditCategoryEnum.SYSTEM] },
+    };
+
+    const [data, total] = await Promise.all([
+      this.auditLogModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.auditLogModel.countDocuments(filter),
+    ]);
+
+    return {
+      success: true,
+      message: 'Pricing change history retrieved',
+      data,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  // ═══════════════════════════════════════════════
   //  PRICE CALCULATOR (admin preview)
   // ═══════════════════════════════════════════════
 
@@ -532,7 +571,8 @@ export class PricingService {
       serviceFee = Math.min(serviceFee, config.maximumServiceFee);
     }
 
-    const totalPrice = subtotal + serviceFee;
+    const fctDevelopmentLevy = config.fctDevelopmentLevy || 0;
+    const totalPrice = subtotal + serviceFee + fctDevelopmentLevy;
 
     return {
       success: true,
@@ -544,6 +584,7 @@ export class PricingService {
           sizeFee,
           timePrice,
           serviceFee,
+          fctDevelopmentLevy,
           subtotal,
           totalPrice,
           currency: config.currency,

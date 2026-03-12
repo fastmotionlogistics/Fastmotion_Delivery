@@ -548,8 +548,9 @@ export class DeliveryService {
     const delivery = await this.deliveryModel.findById(body.deliveryId);
     if (!delivery) throw new NotFoundException('Delivery not found');
 
-    if (delivery.paymentStatus !== DeliveryPaymentStatusEnum.PAID) {
-      throw new BadRequestException('Delivery payment status is not "paid". Cannot issue refund.');
+    if (delivery.paymentStatus !== DeliveryPaymentStatusEnum.PAID &&
+        delivery.paymentStatus !== DeliveryPaymentStatusEnum.PARTIALLY_REFUNDED) {
+      throw new BadRequestException('Delivery has not been paid. Cannot issue refund.');
     }
 
     if (body.amount > delivery.pricing.totalPrice) {
@@ -558,6 +559,7 @@ export class DeliveryService {
 
     const isFullRefund = body.refundType === 'full' || body.amount >= delivery.pricing.totalPrice;
 
+    // Update delivery payment status
     await this.deliveryModel.updateOne(
       { _id: body.deliveryId },
       {
@@ -569,9 +571,50 @@ export class DeliveryService {
       },
     );
 
+    // Create refund payment record
+    const refundRef = `REF-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const originalPayment = await this.paymentModel.findOne({
+      deliveryRequest: new Types.ObjectId(body.deliveryId),
+      isRefund: false,
+      status: 'paid',
+    });
+
+    await this.paymentModel.create({
+      _id: new Types.ObjectId(),
+      reference: refundRef,
+      user: delivery.customer,
+      deliveryRequest: new Types.ObjectId(body.deliveryId),
+      amount: body.amount,
+      currency: delivery.pricing.currency || 'NGN',
+      paymentMethod: originalPayment?.paymentMethod || 'wallet',
+      status: 'paid',
+      isRefund: true,
+      originalPayment: originalPayment?._id,
+      refundedAmount: body.amount,
+      refundedAt: new Date(),
+      refundReason: body.reason,
+      paidAt: new Date(),
+      description: `Refund for delivery #${delivery.trackingNumber}: ${body.reason}`,
+    });
+
+    // Update original payment with refund info
+    if (originalPayment) {
+      await this.paymentModel.updateOne(
+        { _id: originalPayment._id },
+        {
+          $set: {
+            refundedAmount: (originalPayment.refundedAmount || 0) + body.amount,
+            refundedAt: new Date(),
+            refundReason: body.reason,
+          },
+        },
+      );
+    }
+
     await this.logAdminAction(body.deliveryId, 'refund_issued', body.reason, { paymentStatus: delivery.paymentStatus }, {
       paymentStatus: isFullRefund ? DeliveryPaymentStatusEnum.REFUNDED : DeliveryPaymentStatusEnum.PARTIALLY_REFUNDED,
       refundAmount: body.amount,
+      refundReference: refundRef,
     });
 
     await this.notifyUser(delivery.customer, 'Refund Processed', `A ${isFullRefund ? 'full' : 'partial'} refund of ₦${body.amount.toLocaleString()} has been issued for delivery ${delivery.trackingNumber}.`, {
@@ -585,6 +628,7 @@ export class DeliveryService {
         deliveryId: body.deliveryId,
         refundAmount: body.amount,
         refundType: isFullRefund ? 'full' : 'partial',
+        refundReference: refundRef,
         newPaymentStatus: isFullRefund ? DeliveryPaymentStatusEnum.REFUNDED : DeliveryPaymentStatusEnum.PARTIALLY_REFUNDED,
       },
     };

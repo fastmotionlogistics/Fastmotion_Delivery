@@ -115,6 +115,12 @@ export class CreatePricingConfigDto {
   @Min(0)
   minimumRiderPayout?: number;
 
+  @ApiPropertyOptional({ example: 30, description: 'FCT Development Levy – flat government charge per trip' })
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  fctDevelopmentLevy?: number;
+
   @ApiPropertyOptional({ example: 100, description: 'Rescheduling fee' })
   @IsNumber()
   @IsOptional()

@@ -3,6 +3,8 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody } from '@nestjs/swagger';
 import { AdminAppVersionService } from './app-version.service';
 import { UpsertAppVersionDto } from './dto';
 import { AdminJwtAuthGuard, PermissionGuard } from '../auth/guards';
+import { AuditCategoryEnum } from '@libs/database';
+import { AuditAction } from '../audit/audit-action.decorator';
 
 @ApiTags('Admin - App Version')
 @Controller('app-version')
@@ -13,6 +15,7 @@ export class AdminAppVersionController {
 
   @ApiOperation({ summary: 'Set/update app version config (user or rider)' })
   @ApiBody({ type: UpsertAppVersionDto })
+  @AuditAction({ action: 'Update App Version', category: AuditCategoryEnum.SYSTEM, targetType: 'AppVersion' })
   @Post()
   async upsertVersion(@Body() dto: UpsertAppVersionDto) {
     return this.service.upsertVersion(dto);

@@ -139,6 +139,11 @@ export class PricingConfig extends AbstractDocument {
   @Prop({ type: Number, default: 100 })
   minimumRiderPayout: number;
 
+  // Government levies
+  @ApiProperty({ example: 30, description: 'FCT Development Levy – flat government charge per trip (₦)' })
+  @Prop({ type: Number, default: 0 })
+  fctDevelopmentLevy: number;
+
   // Rescheduling fees
   @ApiProperty({ example: 100, description: 'Fee for rescheduling' })
   @Prop({ type: Number, default: 0 })

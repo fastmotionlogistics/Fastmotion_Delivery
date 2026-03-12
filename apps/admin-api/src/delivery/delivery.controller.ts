@@ -21,7 +21,8 @@ import {
   DeliveryFilterDto,
 } from './dto';
 import { AdminJwtAuthGuard, PermissionGuard, RequirePermissions } from '../auth/guards';
-import { AdminPermissionEnum } from '@libs/database';
+import { AdminPermissionEnum, AuditCategoryEnum } from '@libs/database';
+import { AuditAction } from '../audit/audit-action.decorator';
 
 @ApiTags('Admin - Delivery Management')
 @Controller('delivery')
@@ -71,6 +72,7 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Assign rider to scheduled delivery' })
   @ApiBody({ type: AssignRiderDto })
+  @AuditAction({ action: 'Assign Rider', category: AuditCategoryEnum.DELIVERY, targetType: 'Delivery' })
   @Post('assign-rider')
   async assignRider(@Body() body: AssignRiderDto) {
     return await this.deliveryService.assignRider(body);
@@ -78,6 +80,7 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Reassign rider to delivery' })
   @ApiBody({ type: AssignRiderDto })
+  @AuditAction({ action: 'Reassign Rider', category: AuditCategoryEnum.DELIVERY, targetType: 'Delivery' })
   @Post('reassign-rider')
   async reassignRider(@Body() body: AssignRiderDto) {
     return await this.deliveryService.reassignRider(body);
@@ -87,6 +90,7 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Override PIN validation' })
   @ApiBody({ type: OverridePinDto })
+  @AuditAction({ action: 'Override PIN', category: AuditCategoryEnum.DELIVERY, targetType: 'Delivery' })
   @Post('override-pin')
   async overridePin(@Body() body: OverridePinDto) {
     return await this.deliveryService.overridePin(body);
@@ -94,6 +98,7 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Manually complete delivery' })
   @ApiBody({ type: ManualCompleteDto })
+  @AuditAction({ action: 'Manual Complete Delivery', category: AuditCategoryEnum.DELIVERY, targetType: 'Delivery' })
   @Post('manual-complete')
   async manualComplete(@Body() body: ManualCompleteDto) {
     return await this.deliveryService.manualComplete(body);
@@ -101,6 +106,7 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Manually cancel delivery' })
   @ApiBody({ type: ManualCancelDto })
+  @AuditAction({ action: 'Manual Cancel Delivery', category: AuditCategoryEnum.DELIVERY, targetType: 'Delivery' })
   @Post('manual-cancel')
   async manualCancel(@Body() body: ManualCancelDto) {
     return await this.deliveryService.manualCancel(body);
@@ -108,6 +114,7 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Adjust delivery price' })
   @ApiBody({ type: AdjustPriceDto })
+  @AuditAction({ action: 'Adjust Delivery Price', category: AuditCategoryEnum.FINANCE, targetType: 'Delivery' })
   @Post('adjust-price')
   async adjustPrice(@Body() body: AdjustPriceDto) {
     return await this.deliveryService.adjustPrice(body);
@@ -115,6 +122,7 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Update delivery status' })
   @ApiBody({ type: UpdateDeliveryStatusDto })
+  @AuditAction({ action: 'Update Delivery Status', category: AuditCategoryEnum.DELIVERY, targetType: 'Delivery' })
   @Patch('status')
   async updateStatus(@Body() body: UpdateDeliveryStatusDto) {
     return await this.deliveryService.updateStatus(body);
@@ -124,6 +132,7 @@ export class DeliveryController {
 
   @ApiOperation({ summary: 'Issue refund for delivery' })
   @ApiBody({ type: IssueRefundDto })
+  @AuditAction({ action: 'Issue Refund', category: AuditCategoryEnum.FINANCE, targetType: 'Delivery' })
   @Post('refund')
   async issueRefund(@Body() body: IssueRefundDto) {
     return await this.deliveryService.issueRefund(body);

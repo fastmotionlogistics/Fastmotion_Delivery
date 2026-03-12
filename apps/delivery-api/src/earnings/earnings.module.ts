@@ -11,6 +11,10 @@ import {
   DeliveryRequestSchema,
   PricingConfig,
   PricingConfigSchema,
+  PlatformEarning,
+  PlatformEarningSchema,
+  WithdrawalRequest,
+  WithdrawalRequestSchema,
 } from '@libs/database';
 
 @Module({
@@ -20,6 +24,8 @@ import {
       { name: RiderEarnings.name, schema: RiderEarningsSchema },
       { name: DeliveryRequest.name, schema: DeliveryRequestSchema },
       { name: PricingConfig.name, schema: PricingConfigSchema },
+      { name: PlatformEarning.name, schema: PlatformEarningSchema },
+      { name: WithdrawalRequest.name, schema: WithdrawalRequestSchema },
     ]),
   ],
   controllers: [EarningsController],

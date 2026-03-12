@@ -36,3 +36,12 @@ export * from './admin.schema';
 
 // App Version
 export * from './appVersion.schema';
+
+// Platform Earnings
+export * from './platformEarning.schema';
+
+// Audit Logs
+export * from './auditLog.schema';
+
+// Withdrawal Requests
+export * from './withdrawalRequest.schema';

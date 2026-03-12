@@ -4,6 +4,8 @@ import { AdminDisputeService } from './dispute.service';
 import { UpdateDisputeStatusDto, AddAdminMessageDto, AssignDisputeDto } from './dto';
 import { AdminJwtAuthGuard, PermissionGuard } from '../auth/guards';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
+import { AuditCategoryEnum } from '@libs/database';
+import { AuditAction } from '../audit/audit-action.decorator';
 
 @ApiTags('Admin - Dispute Management')
 @Controller('dispute')
@@ -37,6 +39,7 @@ export class AdminDisputeController {
 
   @ApiOperation({ summary: 'Update dispute status (in_review, resolved, closed, escalated)' })
   @ApiBody({ type: UpdateDisputeStatusDto })
+  @AuditAction({ action: 'Update Dispute Status', category: AuditCategoryEnum.DISPUTE, targetType: 'Dispute' })
   @Patch('status')
   async updateDisputeStatus(@CurrentAdmin() admin: any, @Body() body: UpdateDisputeStatusDto) {
     return this.disputeService.updateDisputeStatus(admin._id.toString(), body);
@@ -51,6 +54,7 @@ export class AdminDisputeController {
 
   @ApiOperation({ summary: 'Assign dispute to an admin' })
   @ApiBody({ type: AssignDisputeDto })
+  @AuditAction({ action: 'Assign Dispute', category: AuditCategoryEnum.DISPUTE, targetType: 'Dispute' })
   @Post('assign')
   async assignDispute(@Body() body: AssignDisputeDto) {
     return this.disputeService.assignDispute(body);

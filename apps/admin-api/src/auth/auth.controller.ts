@@ -19,9 +19,10 @@ import {
   ResetAdminPasswordDto,
   LogoutAdminDto,
 } from './dto';
-import { Admin, AdminRoleEnum } from '@libs/database';
+import { Admin, AdminRoleEnum, AuditCategoryEnum } from '@libs/database';
 import { AdminLocalAuthGuard, AdminJwtAuthGuard, PermissionGuard, RequireRoles } from './guards';
 import { CurrentAdmin } from './decorators/current-admin.decorator';
+import { AuditAction } from '../audit/audit-action.decorator';
 
 @ApiTags('Admin Auth & Management')
 @Controller('auth')
@@ -33,6 +34,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Admin login' })
   @ApiBody({ type: LoginAdminDto })
   @UseGuards(AdminLocalAuthGuard)
+  @AuditAction({ action: 'Admin Login', category: AuditCategoryEnum.AUTH, targetType: 'Admin' })
   @Post('login')
   async login(
     @CurrentAdmin() admin: Admin,
@@ -56,6 +58,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Change own password' })
   @UseGuards(AdminJwtAuthGuard)
   @ApiBearerAuth()
+  @AuditAction({ action: 'Change Password', category: AuditCategoryEnum.AUTH, targetType: 'Admin' })
   @Post('change-password')
   async changePassword(
     @CurrentAdmin() admin: Admin,
@@ -81,6 +84,7 @@ export class AuthController {
   @UseGuards(AdminJwtAuthGuard, PermissionGuard)
   @RequireRoles(AdminRoleEnum.SUPER_ADMIN, AdminRoleEnum.ADMIN)
   @ApiBearerAuth()
+  @AuditAction({ action: 'Create Admin', category: AuditCategoryEnum.ADMIN, targetType: 'Admin' })
   @Post('admins')
   async createAdmin(
     @CurrentAdmin() admin: Admin,
@@ -111,6 +115,7 @@ export class AuthController {
   @UseGuards(AdminJwtAuthGuard, PermissionGuard)
   @RequireRoles(AdminRoleEnum.SUPER_ADMIN)
   @ApiBearerAuth()
+  @AuditAction({ action: 'Update Admin', category: AuditCategoryEnum.ADMIN, targetType: 'Admin', targetIdParam: 'id' })
   @Put('admins/:id')
   async updateAdmin(@Param('id') id: string, @Body() body: UpdateAdminDto) {
     return await this.authService.updateAdmin(id, body);
@@ -120,6 +125,7 @@ export class AuthController {
   @UseGuards(AdminJwtAuthGuard, PermissionGuard)
   @RequireRoles(AdminRoleEnum.SUPER_ADMIN)
   @ApiBearerAuth()
+  @AuditAction({ action: 'Reset Admin Password', category: AuditCategoryEnum.ADMIN, targetType: 'Admin', targetIdParam: 'id' })
   @Post('admins/:id/reset-password')
   async resetAdminPassword(
     @Param('id') id: string,
@@ -132,6 +138,7 @@ export class AuthController {
   @UseGuards(AdminJwtAuthGuard, PermissionGuard)
   @RequireRoles(AdminRoleEnum.SUPER_ADMIN)
   @ApiBearerAuth()
+  @AuditAction({ action: 'Delete Admin', category: AuditCategoryEnum.ADMIN, targetType: 'Admin', targetIdParam: 'id' })
   @Delete('admins/:id')
   async deleteAdmin(
     @CurrentAdmin() admin: Admin,

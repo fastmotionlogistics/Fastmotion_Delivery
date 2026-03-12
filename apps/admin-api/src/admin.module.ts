@@ -4,7 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
-import { LoggerModule, MessageModule, ShutdownService } from '@libs/common';
+import { LoggerModule, MessageModule, ShutdownService, GatewayModule } from '@libs/common';
 import { DatabaseModule } from '@libs/database';
 import { FirebaseModule } from 'nestjs-firebase';
 
@@ -17,6 +17,10 @@ import { CatalogModule } from './catalog/catalog.module';
 import { AdminDisputeModule } from './dispute/dispute.module';
 import { AdminAppVersionModule } from './app-version/app-version.module';
 import { AdminNotificationModule } from './notification/notification.module';
+import { UserManagementModule } from './user-management/user-management.module';
+import { AdminEarningsModule } from './earnings/earnings.module';
+import { AuditModule } from './audit/audit.module';
+import { WithdrawalsModule } from './withdrawals/withdrawals.module';
 
 @Module({
   imports: [
@@ -71,6 +75,11 @@ import { AdminNotificationModule } from './notification/notification.module';
     AdminDisputeModule,
     AdminAppVersionModule,
     AdminNotificationModule,
+    UserManagementModule,
+    AdminEarningsModule,
+    AuditModule,
+    WithdrawalsModule,
+    GatewayModule,
   ],
   providers: [ShutdownService],
 })

@@ -29,7 +29,7 @@ import { CrossServiceBridge } from './cross-service-bridge';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
-  userType?: 'customer' | 'rider';
+  userType?: 'customer' | 'rider' | 'admin';
   userName?: string;
 }
 
@@ -120,38 +120,45 @@ export class DeliveryGateway implements OnGatewayConnection, OnGatewayDisconnect
   @SubscribeMessage(WS_EVENTS.AUTHENTICATE)
   async onAuthenticate(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { token: string; userType?: 'customer' | 'rider' },
+    @MessageBody() data: { token: string; userType?: 'customer' | 'rider' | 'admin' },
   ) {
     await this.authenticateClient(client, data.token, data.userType || 'customer');
   }
 
-  private async authenticateClient(client: AuthenticatedSocket, token: string, userType: 'customer' | 'rider') {
+  private async authenticateClient(client: AuthenticatedSocket, token: string, userType: 'customer' | 'rider' | 'admin') {
     try {
-      const secret = this.configService.get<string>('JWT_SECRET');
-      let payload = this.jwtService.verify(token, { secret });
+      let payload: any;
 
-      // user-api JWTs are AES-encrypted: the payload is { data: <encrypted_string> }
-      // Decrypt to get the actual user payload (e.g. { user_id, email })
-      if (payload.data && typeof payload.data === 'string' && !payload.user_id && !payload.rider_id) {
-        try {
-          const decrypted = crypto.AES.decrypt(payload.data, secret).toString(crypto.enc.Utf8);
-          if (decrypted) {
-            payload = JSON.parse(decrypted);
+      if (userType === 'admin') {
+        // Admin tokens use JWT_ASECRET
+        const adminSecret = this.configService.get<string>('JWT_ASECRET');
+        if (!adminSecret) throw new Error('Admin JWT secret not configured');
+        payload = this.jwtService.verify(token, { secret: adminSecret });
+      } else {
+        const secret = this.configService.get<string>('JWT_SECRET');
+        payload = this.jwtService.verify(token, { secret });
+
+        // user-api JWTs are AES-encrypted: the payload is { data: <encrypted_string> }
+        if (payload.data && typeof payload.data === 'string' && !payload.user_id && !payload.rider_id) {
+          try {
+            const decrypted = crypto.AES.decrypt(payload.data, secret).toString(crypto.enc.Utf8);
+            if (decrypted) {
+              payload = JSON.parse(decrypted);
+            }
+          } catch (decryptErr) {
+            this.logger.warn(`AES decrypt failed for ${client.id}: ${decryptErr.message}`);
           }
-        } catch (decryptErr) {
-          this.logger.warn(`AES decrypt failed for ${client.id}: ${decryptErr.message}`);
         }
       }
 
-      // user-api JWTs use `user_id`, delivery-api JWTs use `rider_id`
-      const userId = payload.user_id || payload.rider_id || payload.sub || payload._id;
+      const userId = payload.admin_id || payload.user_id || payload.rider_id || payload.sub || payload._id;
 
       if (!userId) {
         throw new Error('No user id in token');
       }
 
       client.userId = String(userId);
-      client.userType = payload.rider_id ? 'rider' : userType;
+      client.userType = payload.admin_id ? 'admin' : payload.rider_id ? 'rider' : userType;
       client.userName = [payload.firstName, payload.lastName].filter(Boolean).join(' ') || 'User';
 
       // Track multi-device sockets
@@ -279,14 +286,17 @@ export class DeliveryGateway implements OnGatewayConnection, OnGatewayDisconnect
       .catch((e) => this.logger.error(`Rider loc persist fail: ${e.message}`));
 
     // Broadcast to delivery tracking room
-    this.server.to(getRoomName.delivery(data.deliveryId)).emit(WS_SERVER_EVENTS.RIDER_LOCATION, {
+    const locationPayload = {
       deliveryId: data.deliveryId,
       latitude: data.latitude,
       longitude: data.longitude,
       heading: data.heading,
       speed: data.speed,
       timestamp: new Date(),
-    });
+    };
+    this.server.to(getRoomName.delivery(data.deliveryId)).emit(WS_SERVER_EVENTS.RIDER_LOCATION, locationPayload);
+    // Also broadcast to admin live dispatch room
+    this.server.to(getRoomName.adminLive()).emit(WS_SERVER_EVENTS.ADMIN_RIDER_LOCATION, locationPayload);
   }
 
   // ═══════════════════════════════════════════════
@@ -465,6 +475,88 @@ export class DeliveryGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   // ═══════════════════════════════════════════════
+  //  ADMIN — live dispatch subscription
+  // ═══════════════════════════════════════════════
+
+  private readonly ACTIVE_STATUSES = [
+    'pending', 'searching_rider', 'rider_accepted', 'rider_assigned',
+    'rider_en_route_pickup', 'rider_arrived_pickup', 'picked_up',
+    'in_transit', 'rider_arrived_dropoff', 'scheduled',
+    'awaiting_payment', 'payment_confirmed',
+  ];
+
+  @SubscribeMessage(WS_EVENTS.ADMIN_SUBSCRIBE_LIVE)
+  async onAdminSubscribeLive(@ConnectedSocket() client: AuthenticatedSocket) {
+    if (!client.userId || client.userType !== 'admin') {
+      return client.emit(WS_SERVER_EVENTS.ERROR, { message: 'Admin authentication required' });
+    }
+
+    const room = getRoomName.adminLive();
+    client.join(room);
+    this.logger.log(`Admin ${client.userId} joined live dispatch room`);
+
+    // Send snapshot of all active deliveries with rider locations
+    const deliveries = await this.deliveryModel
+      .find({ status: { $in: this.ACTIVE_STATUSES } })
+      .select(
+        'trackingNumber status deliveryType customer rider ' +
+        'pickupLocation dropoffLocation pricing estimatedDistance ' +
+        'scheduledPickupTime createdAt updatedAt',
+      )
+      .populate('customer', 'firstName lastName phone')
+      .populate('rider', 'firstName lastName phone vehicleType vehiclePlateNumber currentLatitude currentLongitude lastLocationUpdate')
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+
+    client.emit(WS_SERVER_EVENTS.ADMIN_ACTIVE_DELIVERIES, {
+      deliveries: deliveries.map((d: any) => ({
+        id: d._id,
+        trackingNumber: d.trackingNumber,
+        status: d.status,
+        deliveryType: d.deliveryType,
+        customer: d.customer ? {
+          id: d.customer._id,
+          name: [d.customer.firstName, d.customer.lastName].filter(Boolean).join(' '),
+          phone: d.customer.phone,
+        } : null,
+        rider: d.rider ? {
+          id: d.rider._id,
+          name: [d.rider.firstName, d.rider.lastName].filter(Boolean).join(' '),
+          phone: d.rider.phone,
+          vehicleType: d.rider.vehicleType,
+          vehiclePlateNumber: d.rider.vehiclePlateNumber,
+          latitude: d.rider.currentLatitude ? parseFloat(d.rider.currentLatitude) : null,
+          longitude: d.rider.currentLongitude ? parseFloat(d.rider.currentLongitude) : null,
+          lastLocationUpdate: d.rider.lastLocationUpdate,
+        } : null,
+        pickup: d.pickupLocation ? {
+          address: d.pickupLocation.address,
+          latitude: d.pickupLocation.latitude,
+          longitude: d.pickupLocation.longitude,
+          contactName: d.pickupLocation.contactName,
+        } : null,
+        dropoff: d.dropoffLocation ? {
+          address: d.dropoffLocation.address,
+          latitude: d.dropoffLocation.latitude,
+          longitude: d.dropoffLocation.longitude,
+          contactName: d.dropoffLocation.contactName,
+        } : null,
+        price: d.pricing?.totalPrice || 0,
+        scheduledPickupTime: d.scheduledPickupTime,
+        createdAt: d.createdAt,
+      })),
+      timestamp: new Date(),
+    });
+  }
+
+  @SubscribeMessage(WS_EVENTS.ADMIN_UNSUBSCRIBE_LIVE)
+  onAdminUnsubscribeLive(@ConnectedSocket() client: AuthenticatedSocket) {
+    client.leave(getRoomName.adminLive());
+    this.logger.log(`Admin ${client.userId} left live dispatch room`);
+  }
+
+  // ═══════════════════════════════════════════════
   //  SERVER-SIDE EMITTERS (called by services)
   // ═══════════════════════════════════════════════
 
@@ -485,6 +577,8 @@ export class DeliveryGateway implements OnGatewayConnection, OnGatewayDisconnect
       payload,
       this.serviceId,
     );
+    // Also broadcast to admin live dispatch room
+    this.server.to(getRoomName.adminLive()).emit(WS_SERVER_EVENTS.ADMIN_DELIVERY_UPDATE, payload);
     this.logger.log(`WS status → ${deliveryId}: ${status}`);
   }
 
@@ -512,6 +606,8 @@ export class DeliveryGateway implements OnGatewayConnection, OnGatewayDisconnect
       payload,
       this.serviceId,
     );
+    // Also broadcast to admin live dispatch room
+    this.server.to(getRoomName.adminLive()).emit(WS_SERVER_EVENTS.ADMIN_RIDER_LOCATION, payload);
   }
 
   /** Broadcast ETA update */

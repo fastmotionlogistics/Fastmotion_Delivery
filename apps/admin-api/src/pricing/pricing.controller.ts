@@ -21,12 +21,13 @@ import {
   CreateTimePricingDto,
   UpdateTimePricingDto,
 } from './dto';
-import { AdminPermissionEnum } from '@libs/database';
+import { AdminPermissionEnum, AuditCategoryEnum } from '@libs/database';
 import {
   AdminJwtAuthGuard,
   PermissionGuard,
   RequirePermissions,
 } from '../auth/guards';
+import { AuditAction } from '../audit/audit-action.decorator';
 
 @ApiTags('Admin - Pricing Management')
 @Controller('pricing')
@@ -54,6 +55,7 @@ export class PricingController {
   @ApiOperation({ summary: 'Create pricing configuration' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreatePricingConfigDto })
+  @AuditAction({ action: 'Create Pricing Config', category: AuditCategoryEnum.PRICING, targetType: 'PricingConfig' })
   @Post('config')
   async createPricingConfig(@Body() body: CreatePricingConfigDto) {
     return await this.pricingService.createPricingConfig(body);
@@ -62,6 +64,7 @@ export class PricingController {
   @ApiOperation({ summary: 'Update pricing configuration' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdatePricingConfigDto })
+  @AuditAction({ action: 'Update Pricing Config', category: AuditCategoryEnum.PRICING, targetType: 'PricingConfig', targetIdParam: 'id' })
   @Put('config/:id')
   async updatePricingConfig(
     @Param('id') id: string,
@@ -90,6 +93,7 @@ export class PricingController {
   @ApiOperation({ summary: 'Create location zone' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreateLocationZoneDto })
+  @AuditAction({ action: 'Create Location Zone', category: AuditCategoryEnum.PRICING, targetType: 'LocationZone' })
   @Post('zones')
   async createZone(@Body() body: CreateLocationZoneDto) {
     return await this.pricingService.createZone(body);
@@ -98,6 +102,7 @@ export class PricingController {
   @ApiOperation({ summary: 'Update location zone' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdateLocationZoneDto })
+  @AuditAction({ action: 'Update Location Zone', category: AuditCategoryEnum.PRICING, targetType: 'LocationZone', targetIdParam: 'id' })
   @Put('zones/:id')
   async updateZone(@Param('id') id: string, @Body() body: UpdateLocationZoneDto) {
     return await this.pricingService.updateZone(id, body);
@@ -105,6 +110,7 @@ export class PricingController {
 
   @ApiOperation({ summary: 'Delete (deactivate) location zone' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
+  @AuditAction({ action: 'Delete Location Zone', category: AuditCategoryEnum.PRICING, targetType: 'LocationZone', targetIdParam: 'id' })
   @Delete('zones/:id')
   async deleteZone(@Param('id') id: string) {
     return await this.pricingService.deleteZone(id);
@@ -130,6 +136,7 @@ export class PricingController {
   @ApiOperation({ summary: 'Create weight pricing tier' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreateWeightPricingDto })
+  @AuditAction({ action: 'Create Weight Pricing', category: AuditCategoryEnum.PRICING, targetType: 'WeightPricing' })
   @Post('weight')
   async createWeightPricing(@Body() body: CreateWeightPricingDto) {
     return await this.pricingService.createWeightPricing(body);
@@ -138,6 +145,7 @@ export class PricingController {
   @ApiOperation({ summary: 'Update weight pricing tier' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdateWeightPricingDto })
+  @AuditAction({ action: 'Update Weight Pricing', category: AuditCategoryEnum.PRICING, targetType: 'WeightPricing', targetIdParam: 'id' })
   @Put('weight/:id')
   async updateWeightPricing(
     @Param('id') id: string,
@@ -148,6 +156,7 @@ export class PricingController {
 
   @ApiOperation({ summary: 'Delete (deactivate) weight pricing tier' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
+  @AuditAction({ action: 'Delete Weight Pricing', category: AuditCategoryEnum.PRICING, targetType: 'WeightPricing', targetIdParam: 'id' })
   @Delete('weight/:id')
   async deleteWeightPricing(@Param('id') id: string) {
     return await this.pricingService.deleteWeightPricing(id);
@@ -173,6 +182,7 @@ export class PricingController {
   @ApiOperation({ summary: 'Create time pricing slot' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreateTimePricingDto })
+  @AuditAction({ action: 'Create Time Pricing', category: AuditCategoryEnum.PRICING, targetType: 'TimePricing' })
   @Post('time')
   async createTimePricing(@Body() body: CreateTimePricingDto) {
     return await this.pricingService.createTimePricing(body);
@@ -181,6 +191,7 @@ export class PricingController {
   @ApiOperation({ summary: 'Update time pricing slot' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdateTimePricingDto })
+  @AuditAction({ action: 'Update Time Pricing', category: AuditCategoryEnum.PRICING, targetType: 'TimePricing', targetIdParam: 'id' })
   @Put('time/:id')
   async updateTimePricing(
     @Param('id') id: string,
@@ -191,9 +202,27 @@ export class PricingController {
 
   @ApiOperation({ summary: 'Delete (deactivate) time pricing slot' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
+  @AuditAction({ action: 'Delete Time Pricing', category: AuditCategoryEnum.PRICING, targetType: 'TimePricing', targetIdParam: 'id' })
   @Delete('time/:id')
   async deleteTimePricing(@Param('id') id: string) {
     return await this.pricingService.deleteTimePricing(id);
+  }
+
+  // ============ Pricing Change History ============
+
+  @ApiOperation({ summary: 'Get pricing change history from audit logs' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  @Get('history')
+  async getPricingChangeHistory(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return await this.pricingService.getPricingChangeHistory({
+      page: page ? parseInt(page) : undefined,
+      limit: limit ? parseInt(limit) : undefined,
+    });
   }
 
   // ============ Price Calculator ============

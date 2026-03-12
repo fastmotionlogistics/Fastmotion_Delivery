@@ -20,6 +20,10 @@ export const WS_EVENTS = {
   CHAT_SEND_MESSAGE: 'chat:send_message',
   CHAT_TYPING: 'chat:typing',
   CHAT_READ: 'chat:read',
+
+  // Admin live dispatch
+  ADMIN_SUBSCRIBE_LIVE: 'admin:subscribe_live',
+  ADMIN_UNSUBSCRIBE_LIVE: 'admin:unsubscribe_live',
 } as const;
 
 // ── Server → Client ──
@@ -29,8 +33,8 @@ export const WS_SERVER_EVENTS = {
   AUTH_ERROR: 'auth_error',
 
   // Tracking
-  RIDER_LOCATION: 'rider:location', // broadcast rider lat/lng to customer
-  DELIVERY_STATUS_UPDATE: 'delivery:status_update', // status changed
+  RIDER_LOCATION: 'rider:location',
+  DELIVERY_STATUS_UPDATE: 'delivery:status_update',
   DELIVERY_ETA_UPDATE: 'delivery:eta_update',
 
   // Chat
@@ -40,7 +44,12 @@ export const WS_SERVER_EVENTS = {
   CHAT_HISTORY: 'chat:history',
 
   // Rider-specific
-  NEW_DELIVERY_REQUEST: 'delivery:new_request', // broadcast to nearby riders
+  NEW_DELIVERY_REQUEST: 'delivery:new_request',
+
+  // Admin live dispatch
+  ADMIN_ACTIVE_DELIVERIES: 'admin:active_deliveries',
+  ADMIN_DELIVERY_UPDATE: 'admin:delivery_update',
+  ADMIN_RIDER_LOCATION: 'admin:rider_location',
 
   // Errors
   ERROR: 'error',
@@ -50,4 +59,5 @@ export const WS_SERVER_EVENTS = {
 export const getRoomName = {
   delivery: (deliveryId: string) => `delivery:${deliveryId}`,
   chat: (deliveryId: string) => `chat:${deliveryId}`,
+  adminLive: () => 'admin:live',
 };

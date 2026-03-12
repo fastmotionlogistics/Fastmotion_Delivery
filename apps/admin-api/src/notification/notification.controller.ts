@@ -13,12 +13,13 @@ import {
   BroadcastNotificationDto,
   NotificationFilterDto,
 } from './dto';
-import { AdminPermissionEnum } from '@libs/database';
+import { AdminPermissionEnum, AuditCategoryEnum } from '@libs/database';
 import {
   AdminJwtAuthGuard,
   PermissionGuard,
   RequirePermissions,
 } from '../auth/guards';
+import { AuditAction } from '../audit/audit-action.decorator';
 
 @ApiTags('Admin - Notifications')
 @Controller('notifications')
@@ -30,6 +31,7 @@ export class AdminNotificationController {
   @ApiOperation({ summary: 'Send notification to a single user or rider' })
   @RequirePermissions(AdminPermissionEnum.DELIVERY_VIEW) // TODO: add NOTIFICATION_SEND permission
   @ApiBody({ type: SendNotificationDto })
+  @AuditAction({ action: 'Send Notification', category: AuditCategoryEnum.NOTIFICATION, targetType: 'Notification' })
   @Post('send')
   async sendNotification(@Body() body: SendNotificationDto) {
     return this.notifService.sendNotification(body);
@@ -38,6 +40,7 @@ export class AdminNotificationController {
   @ApiOperation({ summary: 'Broadcast notification to users, riders, or all' })
   @RequirePermissions(AdminPermissionEnum.DELIVERY_VIEW) // TODO: add NOTIFICATION_BROADCAST permission
   @ApiBody({ type: BroadcastNotificationDto })
+  @AuditAction({ action: 'Broadcast Notification', category: AuditCategoryEnum.NOTIFICATION, targetType: 'Notification' })
   @Post('broadcast')
   async broadcastNotification(@Body() body: BroadcastNotificationDto) {
     return this.notifService.broadcastNotification(body);

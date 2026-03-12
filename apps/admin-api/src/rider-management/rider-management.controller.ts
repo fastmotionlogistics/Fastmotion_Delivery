@@ -20,13 +20,14 @@ import {
   VerifyRiderDto,
   RiderFilterDto,
 } from './dto';
-import { Admin, AdminPermissionEnum } from '@libs/database';
+import { Admin, AdminPermissionEnum, AuditCategoryEnum } from '@libs/database';
 import {
   AdminJwtAuthGuard,
   PermissionGuard,
   RequirePermissions,
 } from '../auth/guards';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
+import { AuditAction } from '../audit/audit-action.decorator';
 
 @ApiTags('Admin - Rider Management')
 @Controller('riders')
@@ -37,6 +38,7 @@ export class RiderManagementController {
 
   @ApiOperation({ summary: 'Create a new rider account' })
   @RequirePermissions(AdminPermissionEnum.RIDER_CREATE)
+  @AuditAction({ action: 'Create Rider', category: AuditCategoryEnum.RIDER, targetType: 'Rider' })
   @Post()
   async createRider(@CurrentAdmin() admin: Admin, @Body() body: CreateRiderDto) {
     return await this.riderService.createRider(admin, body);
@@ -72,6 +74,7 @@ export class RiderManagementController {
 
   @ApiOperation({ summary: 'Update rider details' })
   @RequirePermissions(AdminPermissionEnum.RIDER_EDIT)
+  @AuditAction({ action: 'Update Rider', category: AuditCategoryEnum.RIDER, targetType: 'Rider', targetIdParam: 'id' })
   @Put(':id')
   async updateRider(@Param('id') id: string, @Body() body: UpdateRiderDto) {
     return await this.riderService.updateRider(id, body);
@@ -79,6 +82,7 @@ export class RiderManagementController {
 
   @ApiOperation({ summary: 'Verify or reject rider' })
   @RequirePermissions(AdminPermissionEnum.RIDER_VERIFY)
+  @AuditAction({ action: 'Verify Rider', category: AuditCategoryEnum.RIDER, targetType: 'Rider', targetIdParam: 'id' })
   @Post(':id/verify')
   async verifyRider(@Param('id') id: string, @Body() body: VerifyRiderDto) {
     return await this.riderService.verifyRider(id, body);
@@ -86,6 +90,7 @@ export class RiderManagementController {
 
   @ApiOperation({ summary: 'Suspend rider' })
   @RequirePermissions(AdminPermissionEnum.RIDER_SUSPEND)
+  @AuditAction({ action: 'Suspend Rider', category: AuditCategoryEnum.RIDER, targetType: 'Rider', targetIdParam: 'id' })
   @Post(':id/suspend')
   async suspendRider(
     @CurrentAdmin() admin: Admin,
@@ -97,6 +102,7 @@ export class RiderManagementController {
 
   @ApiOperation({ summary: 'Unsuspend rider' })
   @RequirePermissions(AdminPermissionEnum.RIDER_SUSPEND)
+  @AuditAction({ action: 'Unsuspend Rider', category: AuditCategoryEnum.RIDER, targetType: 'Rider', targetIdParam: 'id' })
   @Post(':id/unsuspend')
   async unsuspendRider(@Param('id') id: string) {
     return await this.riderService.unsuspendRider(id);
@@ -104,6 +110,7 @@ export class RiderManagementController {
 
   @ApiOperation({ summary: 'Reset rider password' })
   @RequirePermissions(AdminPermissionEnum.RIDER_EDIT)
+  @AuditAction({ action: 'Reset Rider Password', category: AuditCategoryEnum.RIDER, targetType: 'Rider', targetIdParam: 'id' })
   @Post(':id/reset-password')
   async resetRiderPassword(
     @Param('id') id: string,
@@ -114,6 +121,7 @@ export class RiderManagementController {
 
   @ApiOperation({ summary: 'Update device binding (bind/unbind device)' })
   @RequirePermissions(AdminPermissionEnum.RIDER_EDIT)
+  @AuditAction({ action: 'Update Rider Device', category: AuditCategoryEnum.RIDER, targetType: 'Rider', targetIdParam: 'id' })
   @Patch(':id/device')
   async updateDeviceBinding(
     @Param('id') id: string,

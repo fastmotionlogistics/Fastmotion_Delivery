@@ -11,6 +11,8 @@ import {
   WeightPricingSchema,
   TimePricing,
   TimePricingSchema,
+  AuditLog,
+  AuditLogSchema,
 } from '@libs/database';
 
 @Module({
@@ -20,6 +22,7 @@ import {
       { name: LocationZone.name, schema: LocationZoneSchema },
       { name: WeightPricing.name, schema: WeightPricingSchema },
       { name: TimePricing.name, schema: TimePricingSchema },
+      { name: AuditLog.name, schema: AuditLogSchema },
     ]),
   ],
   controllers: [PricingController],

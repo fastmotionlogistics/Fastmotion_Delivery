@@ -261,74 +261,118 @@ export class AuthService {
     }
   }
 
-  async googleSignIn(accessToken: string) {
+  private async verifyGoogleIdToken(idToken: string) {
     try {
-      const client = new OAuth2Client({
-        clientId: this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_ID'),
-        clientSecret: this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_SECRET'),
-      });
+      const clientId = this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_ID');
+      const client = new OAuth2Client(clientId);
       const ticket = await client.verifyIdToken({
-        idToken: accessToken,
-        audience: this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_ID'),
+        idToken,
+        audience: clientId,
       });
       const payload = ticket.getPayload();
-      const user = await this.userRepository.findOne({ email: payload.email, isSocialLogin: true });
-      if (user) {
-        return await this.login(user);
+      if (!payload?.email) {
+        throw new BadRequestException('Google account has no email address');
       }
-      throw new NotFoundException('No account found. Please sign up.');
+      return payload;
     } catch (error) {
-      throw error;
+      if (error instanceof BadRequestException) throw error;
+      throw new UnauthorizedException('Invalid Google token. Please try again.');
     }
   }
 
-  async googleSignUp(accessToken: string, ipAddress?: string) {
-    try {
-      const client = new OAuth2Client({
-        clientId: this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_ID'),
-        clientSecret: this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_SECRET'),
-      });
-      const ticket = await client.verifyIdToken({
-        idToken: accessToken,
-        audience: this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_ID'),
-      });
-      const payload = ticket.getPayload();
+  async googleSignIn(accessToken: string) {
+    const payload = await this.verifyGoogleIdToken(accessToken);
 
-      // Check if user already exists
-      const existingUser = await this.userRepository.findOne({
-        email: payload.email,
-      });
-      if (existingUser) {
-        throw new ConflictException('User already exists. Please sign in.');
+    // Check if user exists (social or regular)
+    let user = await this.userRepository.findOne({ email: payload.email });
+
+    if (user) {
+      // If they registered via email/password, link Google to their account
+      if (!user.isSocialLogin) {
+        await this.userRepository.findOneAndUpdate(
+          { _id: user._id },
+          { isSocialLogin: true },
+        );
       }
+      // Generate tokens directly (Google-verified email = trusted)
+      const refresh_token = await this.generateRefreshToken(user, '');
+      const access_token = await this.generateAccessTokens(user, refresh_token);
 
-      // Create new user
-      const passSalt = await bcrypt.genSalt();
-      const randomPassword = await bcrypt.hash(generateRandomString(8), passSalt);
-
-      const user = await this.userRepository.create({
-        email: payload.email,
-        firstName: payload.given_name,
-        lastName: payload.family_name,
-        passwordHash: randomPassword,
-        passwordSalt: passSalt,
-        isEmailConfirmed: true,
-        isSocialLogin: true,
-        emailConfirmationDate: timeZoneMoment().toDate(),
-      });
-
-      const refresh_token = await this.generateRefreshToken(user, ipAddress);
-      const access_token = await this.generateAccessTokens(user);
+      const fullUser = await this.userRepository.findById(user._id);
 
       return {
         success: true,
-        refreshToken: refresh_token,
-        accessToken: access_token,
-        needsOnboarding: true,
+        message: 'Login successful',
+        data: {
+          accessToken: access_token,
+          refreshToken: refresh_token,
+          user: {
+            id: fullUser?._id || user._id,
+            firstName: fullUser?.firstName || user.firstName,
+            lastName: fullUser?.lastName || user.lastName,
+            email: fullUser?.email || user.email,
+            phone: fullUser?.phone || user.phone,
+            isPhotoUpload: fullUser?.isPhotoUpload,
+            isProfileUpdated: fullUser?.isProfileUpdated || user.isProfileUpdated,
+            isOnboardingComplete: fullUser?.isOnboardingComplete || user.isOnboardingComplete,
+            isEmailConfirmed: true,
+            isPhoneConfirmed: fullUser?.isPhoneConfirmed,
+          },
+        },
       };
-    } catch (error) {
-      throw error;
     }
+
+    // No account — auto-register
+    return await this.googleSignUp(accessToken);
+  }
+
+  async googleSignUp(accessToken: string, ipAddress?: string) {
+    const payload = await this.verifyGoogleIdToken(accessToken);
+
+    // Check if user already exists
+    const existingUser = await this.userRepository.findOne({
+      email: payload.email,
+    });
+    if (existingUser) {
+      // Already exists — just sign them in
+      return await this.googleSignIn(accessToken);
+    }
+
+    // Create new user
+    const passSalt = await bcrypt.genSalt();
+    const randomPassword = await bcrypt.hash(generateRandomString(8), passSalt);
+
+    const user = await this.userRepository.create({
+      email: payload.email,
+      firstName: payload.given_name,
+      lastName: payload.family_name,
+      passwordHash: randomPassword,
+      passwordSalt: passSalt,
+      isEmailConfirmed: true,
+      isSocialLogin: true,
+      type: Role.NORMAL_USER,
+      emailConfirmationDate: timeZoneMoment().toDate(),
+    });
+
+    const refresh_token = await this.generateRefreshToken(user, ipAddress);
+    const access_token = await this.generateAccessTokens(user);
+
+    return {
+      success: true,
+      message: 'Account created successfully',
+      data: {
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          isEmailConfirmed: true,
+        },
+        needsOnboarding: true,
+      },
+    };
   }
 
   async resetPassword(data: ResetPasswordDto) {

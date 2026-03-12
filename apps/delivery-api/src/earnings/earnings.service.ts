@@ -12,6 +12,13 @@ import {
   DeliveryRequestDocument,
   PricingConfig,
   PricingConfigDocument,
+  PlatformEarning,
+  PlatformEarningDocument,
+  PlatformEarningTypeEnum,
+  PlatformEarningStatusEnum,
+  WithdrawalRequest,
+  WithdrawalRequestDocument,
+  WithdrawalStatusEnum,
 } from '@libs/database';
 import { DeliveryStatusEnum } from '@libs/common';
 import { WithdrawEarningsDto } from './dto';
@@ -23,6 +30,8 @@ export class EarningsService {
     @InjectModel(RiderEarnings.name) private readonly earningsModel: Model<RiderEarningsDocument>,
     @InjectModel(DeliveryRequest.name) private readonly deliveryModel: Model<DeliveryRequestDocument>,
     @InjectModel(PricingConfig.name) private readonly pricingModel: Model<PricingConfigDocument>,
+    @InjectModel(PlatformEarning.name) private readonly platformEarningModel: Model<PlatformEarningDocument>,
+    @InjectModel(WithdrawalRequest.name) private readonly withdrawalRequestModel: Model<WithdrawalRequestDocument>,
   ) {}
 
   // ═══════════════════════════════════════════════
@@ -72,6 +81,24 @@ export class EarningsService {
       { $inc: { totalEarnings: riderPayout, walletBalance: riderPayout } },
     );
 
+    // Persist platform commission
+    await this.platformEarningModel.create({
+      _id: new Types.ObjectId(),
+      deliveryRequest: deliveryRequestId,
+      rider: riderId,
+      customer: delivery.customer,
+      type: PlatformEarningTypeEnum.DELIVERY_COMMISSION,
+      totalDeliveryPrice: totalPrice,
+      riderPayout,
+      platformCommission,
+      commissionRate: 1 - commissionRate,
+      serviceFee: delivery.pricing?.serviceFee || 0,
+      status: PlatformEarningStatusEnum.EARNED,
+      currency: 'NGN',
+      description: `Commission on delivery #${delivery.trackingNumber}`,
+      trackingNumber: delivery.trackingNumber,
+    });
+
     return { riderPayout, platformCommission, totalPrice };
   }
 
@@ -82,7 +109,7 @@ export class EarningsService {
   async getEarningsOverview(rider: Rider) {
     const riderId = new Types.ObjectId(rider._id as any);
 
-    const [available, pending, withdrawn] = await Promise.all([
+    const [available, pending, withdrawn, held, pendingWithdrawal] = await Promise.all([
       this.earningsModel.aggregate([
         { $match: { rider: riderId, status: EarningsStatusEnum.AVAILABLE } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
@@ -95,9 +122,16 @@ export class EarningsService {
         { $match: { rider: riderId, status: EarningsStatusEnum.WITHDRAWN } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
+      this.earningsModel.aggregate([
+        { $match: { rider: riderId, status: EarningsStatusEnum.HELD } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      this.withdrawalRequestModel.findOne(
+        { rider: riderId, status: WithdrawalStatusEnum.PENDING },
+        { amount: 1, reference: 1, createdAt: 1, status: 1, bankName: 1 },
+      ).lean(),
     ]);
 
-    // Also get fresh walletBalance from DB
     const freshRider = await this.riderModel.findById(rider._id).select('walletBalance totalEarnings').lean();
 
     return {
@@ -107,9 +141,11 @@ export class EarningsService {
         totalEarnings: freshRider?.totalEarnings || rider.totalEarnings || 0,
         availableBalance: freshRider?.walletBalance ?? (available[0]?.total || 0),
         pendingBalance: pending[0]?.total || 0,
+        heldBalance: held[0]?.total || 0,
         totalWithdrawn: withdrawn[0]?.total || 0,
         walletBalance: freshRider?.walletBalance ?? 0,
         currency: 'NGN',
+        pendingWithdrawal: pendingWithdrawal || null,
       },
     };
   }
@@ -186,6 +222,15 @@ export class EarningsService {
 
     const riderId = new Types.ObjectId(rider._id as any);
 
+    // Check for existing pending withdrawal
+    const pendingExists = await this.withdrawalRequestModel.findOne({
+      rider: riderId,
+      status: WithdrawalStatusEnum.PENDING,
+    });
+    if (pendingExists) {
+      throw new BadRequestException('You already have a pending withdrawal request. Please wait for it to be processed.');
+    }
+
     // Get available balance
     const balResult = await this.earningsModel.aggregate([
       { $match: { rider: riderId, status: EarningsStatusEnum.AVAILABLE } },
@@ -200,14 +245,14 @@ export class EarningsService {
       throw new BadRequestException('Minimum withdrawal amount is ₦500');
     }
 
-    // Mark available earnings as withdrawn (oldest first, up to amount)
+    const withdrawalRef = `WD-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+
+    // Hold earnings (FIFO) so they can't be double-withdrawn
     let remaining = body.amount;
     const availableEarnings = await this.earningsModel
       .find({ rider: riderId, status: EarningsStatusEnum.AVAILABLE })
       .sort({ createdAt: 1 })
       .lean();
-
-    const withdrawalRef = `WD-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     for (const earning of availableEarnings) {
       if (remaining <= 0) break;
@@ -215,11 +260,10 @@ export class EarningsService {
       if (earning.amount <= remaining) {
         await this.earningsModel.updateOne(
           { _id: earning._id },
-          { $set: { status: EarningsStatusEnum.WITHDRAWN, withdrawnAt: new Date(), withdrawalReference: withdrawalRef } },
+          { $set: { status: EarningsStatusEnum.HELD, withdrawalReference: withdrawalRef } },
         );
         remaining -= earning.amount;
       } else {
-        // Split: withdraw part, leave remainder as available
         await this.earningsModel.updateOne(
           { _id: earning._id },
           { $set: { amount: earning.amount - remaining } },
@@ -231,9 +275,8 @@ export class EarningsService {
           type: earning.type,
           amount: remaining,
           currency: 'NGN',
-          status: EarningsStatusEnum.WITHDRAWN,
-          description: `Partial withdrawal from ${earning.description || 'earnings'}`,
-          withdrawnAt: new Date(),
+          status: EarningsStatusEnum.HELD,
+          description: `Held for withdrawal ${withdrawalRef}`,
           withdrawalReference: withdrawalRef,
         });
         remaining = 0;
@@ -246,16 +289,30 @@ export class EarningsService {
       { $inc: { walletBalance: -body.amount } },
     );
 
+    // Create pending withdrawal request for admin review
+    await this.withdrawalRequestModel.create({
+      _id: new Types.ObjectId(),
+      rider: riderId,
+      amount: body.amount,
+      currency: 'NGN',
+      bankName: rider.bankName,
+      bankCode: rider.bankCode,
+      bankAccountNumber: rider.bankAccountNumber,
+      bankAccountName: rider.bankAccountName,
+      reference: withdrawalRef,
+      status: WithdrawalStatusEnum.PENDING,
+    });
+
     return {
       success: true,
-      message: 'Withdrawal initiated successfully',
+      message: 'Withdrawal request submitted. It will be processed shortly.',
       data: {
         amount: body.amount,
         reference: withdrawalRef,
         bankName: rider.bankName,
         accountNumber: rider.bankAccountNumber,
         accountName: rider.bankAccountName,
-        status: 'processing',
+        status: 'pending',
       },
     };
   }

@@ -36,6 +36,7 @@ export enum AdminPermissionEnum {
 
   // Financial
   FINANCE_VIEW = 'finance:view',
+  FINANCE_MANAGE = 'finance:manage',
   FINANCE_REFUND = 'finance:refund',
   FINANCE_PRICE_ADJUST = 'finance:price_adjust',
   FINANCE_EARNINGS = 'finance:earnings',
@@ -73,7 +74,7 @@ export const ROLE_PERMISSIONS: Record<AdminRoleEnum, AdminPermissionEnum[]> = {
     AdminPermissionEnum.RIDER_VIEW, AdminPermissionEnum.RIDER_CREATE, AdminPermissionEnum.RIDER_EDIT,
     AdminPermissionEnum.RIDER_SUSPEND, AdminPermissionEnum.RIDER_VERIFY, AdminPermissionEnum.RIDER_ASSIGN_DELIVERY,
     AdminPermissionEnum.USER_VIEW, AdminPermissionEnum.USER_EDIT, AdminPermissionEnum.USER_SUSPEND,
-    AdminPermissionEnum.FINANCE_VIEW, AdminPermissionEnum.FINANCE_REFUND, AdminPermissionEnum.FINANCE_PRICE_ADJUST,
+    AdminPermissionEnum.FINANCE_VIEW, AdminPermissionEnum.FINANCE_MANAGE, AdminPermissionEnum.FINANCE_REFUND, AdminPermissionEnum.FINANCE_PRICE_ADJUST,
     AdminPermissionEnum.PRICING_VIEW, AdminPermissionEnum.PRICING_MANAGE,
     AdminPermissionEnum.DISPUTE_VIEW, AdminPermissionEnum.DISPUTE_MANAGE,
     AdminPermissionEnum.REPORT_VIEW, AdminPermissionEnum.REPORT_EXPORT,
@@ -104,7 +105,7 @@ export const ROLE_PERMISSIONS: Record<AdminRoleEnum, AdminPermissionEnum[]> = {
   ],
 
   [AdminRoleEnum.FINANCE_MANAGER]: [
-    AdminPermissionEnum.FINANCE_VIEW, AdminPermissionEnum.FINANCE_REFUND, AdminPermissionEnum.FINANCE_PRICE_ADJUST,
+    AdminPermissionEnum.FINANCE_VIEW, AdminPermissionEnum.FINANCE_MANAGE, AdminPermissionEnum.FINANCE_REFUND, AdminPermissionEnum.FINANCE_PRICE_ADJUST,
     AdminPermissionEnum.FINANCE_EARNINGS,
     AdminPermissionEnum.PRICING_VIEW, AdminPermissionEnum.PRICING_MANAGE,
     AdminPermissionEnum.DELIVERY_VIEW,

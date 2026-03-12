@@ -17,12 +17,13 @@ import {
   CreateSpecialHandlingDto,
   UpdateSpecialHandlingDto,
 } from './dto';
-import { AdminPermissionEnum } from '@libs/database';
+import { AdminPermissionEnum, AuditCategoryEnum } from '@libs/database';
 import {
   AdminJwtAuthGuard,
   PermissionGuard,
   RequirePermissions,
 } from '../auth/guards';
+import { AuditAction } from '../audit/audit-action.decorator';
 
 @ApiTags('Admin - Catalog (Categories & Handling)')
 @Controller('catalog')
@@ -51,6 +52,7 @@ export class CatalogController {
   @ApiOperation({ summary: 'Create item category' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreateItemCategoryDto })
+  @AuditAction({ action: 'Create Item Category', category: AuditCategoryEnum.SYSTEM, targetType: 'ItemCategory' })
   @Post('categories')
   async createCategory(@Body() body: CreateItemCategoryDto) {
     return await this.catalogService.createCategory(body);
@@ -59,6 +61,7 @@ export class CatalogController {
   @ApiOperation({ summary: 'Update item category' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdateItemCategoryDto })
+  @AuditAction({ action: 'Update Item Category', category: AuditCategoryEnum.SYSTEM, targetType: 'ItemCategory', targetIdParam: 'id' })
   @Put('categories/:id')
   async updateCategory(@Param('id') id: string, @Body() body: UpdateItemCategoryDto) {
     return await this.catalogService.updateCategory(id, body);
@@ -66,6 +69,7 @@ export class CatalogController {
 
   @ApiOperation({ summary: 'Delete (deactivate) item category' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
+  @AuditAction({ action: 'Delete Item Category', category: AuditCategoryEnum.SYSTEM, targetType: 'ItemCategory', targetIdParam: 'id' })
   @Delete('categories/:id')
   async deleteCategory(@Param('id') id: string) {
     return await this.catalogService.deleteCategory(id);
@@ -91,6 +95,7 @@ export class CatalogController {
   @ApiOperation({ summary: 'Create special handling option' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: CreateSpecialHandlingDto })
+  @AuditAction({ action: 'Create Special Handling', category: AuditCategoryEnum.SYSTEM, targetType: 'SpecialHandling' })
   @Post('handling')
   async createHandling(@Body() body: CreateSpecialHandlingDto) {
     return await this.catalogService.createHandling(body);
@@ -99,6 +104,7 @@ export class CatalogController {
   @ApiOperation({ summary: 'Update special handling option' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
   @ApiBody({ type: UpdateSpecialHandlingDto })
+  @AuditAction({ action: 'Update Special Handling', category: AuditCategoryEnum.SYSTEM, targetType: 'SpecialHandling', targetIdParam: 'id' })
   @Put('handling/:id')
   async updateHandling(@Param('id') id: string, @Body() body: UpdateSpecialHandlingDto) {
     return await this.catalogService.updateHandling(id, body);
@@ -106,6 +112,7 @@ export class CatalogController {
 
   @ApiOperation({ summary: 'Delete (deactivate) special handling option' })
   @RequirePermissions(AdminPermissionEnum.PRICING_MANAGE)
+  @AuditAction({ action: 'Delete Special Handling', category: AuditCategoryEnum.SYSTEM, targetType: 'SpecialHandling', targetIdParam: 'id' })
   @Delete('handling/:id')
   async deleteHandling(@Param('id') id: string) {
     return await this.catalogService.deleteHandling(id);
