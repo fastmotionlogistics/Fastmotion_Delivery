@@ -21,6 +21,7 @@ import { UserManagementModule } from './user-management/user-management.module';
 import { AdminEarningsModule } from './earnings/earnings.module';
 import { AuditModule } from './audit/audit.module';
 import { WithdrawalsModule } from './withdrawals/withdrawals.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
     AdminEarningsModule,
     AuditModule,
     WithdrawalsModule,
+    DashboardModule,
     GatewayModule,
   ],
   providers: [ShutdownService],
