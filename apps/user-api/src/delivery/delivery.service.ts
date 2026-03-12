@@ -136,15 +136,19 @@ export class DeliveryService {
     });
 
     // Notify user: delivery created
-    this.notificationService.send({
-      recipientId: user._id,
-      recipientType: NotificationRecipientType.USER,
-      title: isQuickDelivery ? 'Delivery Created! 📦' : 'Delivery Scheduled! 📅',
-      body: isQuickDelivery
-        ? `Your delivery ${trackingNumber} has been created. Searching for nearby riders...`
-        : `Your delivery ${trackingNumber} has been scheduled for ${new Date(body.scheduledPickupTime).toLocaleDateString('en-NG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.`,
-      data: { type: 'delivery_created', deliveryId: delivery._id.toString(), trackingNumber },
-    }).catch(() => {});
+    this.notificationService
+      .send({
+        recipientId: user._id,
+        recipientType: NotificationRecipientType.USER,
+        title: isQuickDelivery ? 'Delivery Created! 📦' : 'Delivery Scheduled! 📅',
+        body: isQuickDelivery
+          ? `Your delivery ${trackingNumber} has been created. Searching for nearby riders...`
+          : `Your delivery ${trackingNumber} has been scheduled for ${new Date(
+              body.scheduledPickupTime,
+            ).toLocaleDateString('en-NG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.`,
+        data: { type: 'delivery_created', deliveryId: delivery._id.toString(), trackingNumber },
+      })
+      .catch(() => {});
 
     return {
       success: true,
@@ -182,7 +186,7 @@ export class DeliveryService {
           sizeFee: pricing.breakdown.sizeFee,
           categoryAdditionalFee: pricing.breakdown.categoryAdditionalFee || 0,
           handlingFee: pricing.breakdown.handlingFee || 0,
-          sizeMultiplierPrice: pricing.breakdown.sizeMultiplierPrice,
+          // sizeMultiplierPrice: pricing.breakdown.sizeMultiplierPrice,
           categoryMultiplierPrice: pricing.breakdown.categoryMultiplierPrice,
           timeMultiplierPrice: pricing.breakdown.timeMultiplierPrice,
           zoneMultiplierPrice: pricing.breakdown.zoneMultiplierPrice,
@@ -191,12 +195,13 @@ export class DeliveryService {
           subtotal: pricing.breakdown.subtotal,
           totalPrice: pricing.breakdown.totalPrice,
           currency: pricing.breakdown.currency,
+          fctDevelopmentLevy: pricing.breakdown.fctDevelopmentLevy,
         },
         multipliers: {
           zone: pricing.breakdown.zoneMultiplier,
           weight: pricing.breakdown.weightMultiplier,
           time: pricing.breakdown.timeMultiplier,
-          size: pricing.breakdown.sizeMultiplier,
+          // size: pricing.breakdown.sizeMultiplier,
           category: pricing.breakdown.categoryMultiplier,
           deliveryType: pricing.breakdown.deliveryTypeMultiplier,
         },
@@ -639,15 +644,20 @@ export class DeliveryService {
     }
 
     // Notify user: delivery cancelled
-    this.notificationService.send({
-      recipientId: user._id,
-      recipientType: NotificationRecipientType.USER,
-      title: 'Delivery Cancelled',
-      body: refundAmount > 0
-        ? `Your delivery ${delivery.trackingNumber} has been cancelled. A refund of ₦${refundAmount.toLocaleString()} is being processed.`
-        : `Your delivery ${delivery.trackingNumber} has been cancelled.`,
-      data: { type: 'delivery_cancelled', deliveryId: id, trackingNumber: delivery.trackingNumber },
-    }).catch(() => {});
+    this.notificationService
+      .send({
+        recipientId: user._id,
+        recipientType: NotificationRecipientType.USER,
+        title: 'Delivery Cancelled',
+        body:
+          refundAmount > 0
+            ? `Your delivery ${
+                delivery.trackingNumber
+              } has been cancelled. A refund of ₦${refundAmount.toLocaleString()} is being processed.`
+            : `Your delivery ${delivery.trackingNumber} has been cancelled.`,
+        data: { type: 'delivery_cancelled', deliveryId: id, trackingNumber: delivery.trackingNumber },
+      })
+      .catch(() => {});
 
     return {
       success: true,
@@ -1177,7 +1187,7 @@ export class DeliveryService {
     // Size-based pricing from config
     const parcelSize = body.parcelDetails.size || 'medium';
     const sizeFee = config.sizeFees?.[parcelSize] || 0;
-    const sizeMultiplier = config.sizeMultipliers?.[parcelSize] || 1.0;
+    // const sizeMultiplier = config.sizeMultipliers?.[parcelSize] || 1.0;
 
     // Calculate base prices
     const basePrice = config.baseDeliveryFee;
@@ -1188,13 +1198,7 @@ export class DeliveryService {
     // Weight removed — only size matters
     let subtotal = basePrice + distancePrice + timePrice + sizeFee + categoryAdditionalFee + handlingTotalFee;
     subtotal = Math.round(
-      subtotal *
-        sizeMultiplier *
-        categoryMultiplier *
-        zoneMultiplier *
-        timeMultiplier *
-        deliveryTypeMultiplier *
-        interZoneMultiplier,
+      subtotal * categoryMultiplier * zoneMultiplier * timeMultiplier * deliveryTypeMultiplier * interZoneMultiplier,
     );
 
     // Apply minimum
@@ -1205,6 +1209,9 @@ export class DeliveryService {
       subtotal = Math.min(subtotal, config.maximumDeliveryFee);
     }
 
+    if (config.fctDevelopmentLevy > 0) {
+      subtotal = subtotal + config.fctDevelopmentLevy;
+    }
     // Calculate service fee
     let serviceFee = Math.round(subtotal * (config.serviceFeePercentage || 0));
     serviceFee = Math.max(serviceFee, config.minimumServiceFee || 0);
@@ -1234,7 +1241,7 @@ export class DeliveryService {
     const totalPrice = subtotal + serviceFee - discountAmount;
 
     // Rider earnings = rider commission percentage of totalPrice (matching delivery-api computeRiderPayout)
-    const riderCommission = config.riderCommissionPercentage || 0.80;
+    const riderCommission = config.riderCommissionPercentage || 0.8;
     const riderEarnings = Math.round(totalPrice * riderCommission);
     const minimumPayout = config.minimumRiderPayout || 100;
     const finalRiderEarnings = Math.max(riderEarnings, minimumPayout);
@@ -1254,7 +1261,8 @@ export class DeliveryService {
         sizeFee,
         categoryAdditionalFee,
         handlingFee: handlingTotalFee,
-        sizeMultiplierPrice: sizeMultiplier > 1 ? Math.round(subtotal - subtotal / sizeMultiplier) : 0,
+        fctDevelopmentLevy: config.fctDevelopmentLevy,
+        // sizeMultiplierPrice: sizeMultiplier > 1 ? Math.round(subtotal - subtotal / sizeMultiplier) : 0,
         categoryMultiplierPrice: categoryMultiplier > 1 ? Math.round(subtotal - subtotal / categoryMultiplier) : 0,
         timeMultiplierPrice: Math.round(subtotal * (timeMultiplier - 1)),
         zoneMultiplierPrice: Math.round(subtotal * (zoneMultiplier - 1)),
@@ -1269,7 +1277,7 @@ export class DeliveryService {
         zoneMultiplier,
         weightMultiplier: 1.0,
         timeMultiplier,
-        sizeMultiplier,
+        // sizeMultiplier,
         categoryMultiplier,
         deliveryTypeMultiplier,
         riderEarnings: finalRiderEarnings,

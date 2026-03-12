@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
-import { IsString, IsNumber, IsOptional, IsBoolean, IsDateString, Min, Max } from 'class-validator';
+import { IsString, IsNumber, IsOptional, IsBoolean, IsDateString, IsObject, Min, Max } from 'class-validator';
 
 export class CreatePricingConfigDto {
   @ApiPropertyOptional({ example: 'NGN' })
@@ -126,6 +126,14 @@ export class CreatePricingConfigDto {
   @IsOptional()
   @Min(0)
   reschedulingFee?: number;
+
+  @ApiPropertyOptional({
+    example: { small: 0, medium: 200, large: 500, extra_large: 1000 },
+    description: 'Additional flat fee per parcel size',
+  })
+  @IsOptional()
+  @IsObject()
+  sizeFees?: Record<string, number>;
 
   @ApiPropertyOptional()
   @IsDateString()

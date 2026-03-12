@@ -96,15 +96,15 @@ export class PricingConfig extends AbstractDocument {
   })
   sizeFees: Record<string, number>;
 
-  @ApiProperty({
-    example: { small: 1.0, medium: 1.0, large: 1.2, extra_large: 1.5 },
-    description: 'Multiplier per parcel size applied to the subtotal',
-  })
-  @Prop({
-    type: Object,
-    default: { small: 1.0, medium: 1.0, large: 1.2, extra_large: 1.5 },
-  })
-  sizeMultipliers: Record<string, number>;
+  // @ApiProperty({
+  //   example: { small: 1.0, medium: 1.0, large: 1.2, extra_large: 1.5 },
+  //   description: 'Multiplier per parcel size applied to the subtotal',
+  // })
+  // @Prop({
+  //   type: Object,
+  //   default: { small: 1.0, medium: 1.0, large: 1.2, extra_large: 1.5 },
+  // })
+  // sizeMultipliers: Record<string, number>;
 
   // ── Category-based pricing ──
   @ApiProperty({
@@ -126,10 +126,11 @@ export class PricingConfig extends AbstractDocument {
 
   // ── Rider Commission ──
   @ApiProperty({
-    example: 0.80,
-    description: 'Percentage of delivery fee that goes to rider (0.80 = 80%). The remaining 20% is platform commission.',
+    example: 0.8,
+    description:
+      'Percentage of delivery fee that goes to rider (0.80 = 80%). The remaining 20% is platform commission.',
   })
-  @Prop({ type: Number, default: 0.80 })
+  @Prop({ type: Number, default: 0.8 })
   riderCommissionPercentage: number;
 
   @ApiProperty({

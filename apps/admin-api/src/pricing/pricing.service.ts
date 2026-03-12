@@ -109,6 +109,7 @@ export class PricingService {
       minimumRiderPayout: body.minimumRiderPayout ?? 100,
       fctDevelopmentLevy: body.fctDevelopmentLevy ?? 0,
       reschedulingFee: body.reschedulingFee ?? 0,
+      sizeFees: body.sizeFees ?? { small: 0, medium: 200, large: 500, extra_large: 1000 },
       isActive: true,
       effectiveFrom: body.effectiveFrom ? new Date(body.effectiveFrom) : new Date(),
       effectiveUntil: body.effectiveUntil ? new Date(body.effectiveUntil) : undefined,
@@ -131,9 +132,11 @@ export class PricingService {
     const config = await this.pricingConfigModel.findById(id);
     if (!config) throw new NotFoundException('Pricing config not found');
 
-    const updateData: any = { ...body };
+    const { sizeMultipliers: _omit, ...rest } = body as any;
+    const updateData: any = { ...rest };
     if (body.effectiveFrom) updateData.effectiveFrom = new Date(body.effectiveFrom);
     if (body.effectiveUntil) updateData.effectiveUntil = new Date(body.effectiveUntil);
+    if (body.sizeFees !== undefined) updateData.sizeFees = body.sizeFees;
 
     // If activating this config, deactivate others
     if (body.isActive === true) {
@@ -541,7 +544,6 @@ export class PricingService {
     // Size-based pricing
     const parcelSize = body.size || 'medium';
     const sizeFee = config.sizeFees?.[parcelSize] || 0;
-    const sizeMultiplier = config.sizeMultipliers?.[parcelSize] || 1.0;
 
     // Category-based pricing
     const parcelCategory = body.category || 'other';
@@ -554,7 +556,7 @@ export class PricingService {
 
     let subtotal = basePrice + distancePrice + timePrice + sizeFee;
     subtotal = Math.round(
-      subtotal * sizeMultiplier * categoryMultiplier *
+      subtotal * categoryMultiplier *
       zoneMultiplier * timeMultiplier *
       deliveryTypeMultiplier * interZoneMultiplier,
     );
@@ -592,7 +594,6 @@ export class PricingService {
         },
         multipliers: {
           zone: zoneMultiplier,
-          size: sizeMultiplier,
           category: categoryMultiplier,
           time: timeMultiplier,
           deliveryType: deliveryTypeMultiplier,
