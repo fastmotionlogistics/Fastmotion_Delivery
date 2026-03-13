@@ -1,25 +1,29 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
+import { Interval } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Rider, RiderDocument, DeliveryRequest, DeliveryRequestDocument, PricingConfig, PricingConfigDocument } from '@libs/database';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
 import { NotificationService } from '@libs/common/modules/notification';
 import { NotificationRecipientType } from '@libs/database';
+import {
+  DeliveryMatchingRedisService,
+  REQUEST_TIMEOUT_SEC,
+  MAX_RIDERS,
+} from '@libs/common/modules/delivery-matching';
 
 /**
  * RiderMatchingService
  *
  * Listens for `delivery.created.quick` events emitted when a quick delivery is created.
- * Finds nearby online/available riders and:
- *   1. Broadcasts a new delivery request via WebSocket to each rider
- *   2. Sends push notifications to each rider via FCM
- *
- * Riders then call `acceptDelivery()` from their app to claim the delivery.
- * First rider to accept wins (the accept endpoint checks if already assigned).
+ * Sends delivery requests to riders ONE AT A TIME (max 10 riders):
+ *   - If rider accepts -> delivery starts
+ *   - If rider rejects -> next rider gets the request; rejector gets cooldown with customer
+ *   - If rider doesn't respond in time -> next rider gets the request
  */
 @Injectable()
-export class RiderMatchingService {
+export class RiderMatchingService implements OnModuleInit {
   private readonly logger = new Logger(RiderMatchingService.name);
 
   constructor(
@@ -31,6 +35,7 @@ export class RiderMatchingService {
     private readonly pricingModel: Model<PricingConfigDocument>,
     private readonly gateway: DeliveryGateway,
     private readonly notificationService: NotificationService,
+    private readonly matchingRedis: DeliveryMatchingRedisService,
   ) {}
 
   /** Calculate rider payout after commission */
@@ -80,7 +85,20 @@ export class RiderMatchingService {
       const totalPrice = delivery.pricing?.totalPrice || 0;
       const { riderPayout, commissionRate } = await this.computeRiderPayout(totalPrice);
 
-      // Build the delivery request payload to send to riders
+      const customerId = (delivery.customer as any)?.toString?.() || delivery.customer?.toString() || '';
+      const riderIds = nearbyRiders.map((r) => r._id.toString());
+      const filteredIds = await this.matchingRedis.filterByCooldown(riderIds, customerId);
+      const riderList = nearbyRiders.filter((r) => filteredIds.includes(r._id.toString())).slice(0, MAX_RIDERS);
+
+      if (riderList.length === 0) {
+        this.logger.warn(`No riders available (after cooldown filter) for delivery ${deliveryIdStr}`);
+        return;
+      }
+
+      const idsToUse = riderList.map((r) => r._id.toString());
+      const state = await this.matchingRedis.initMatchingState(deliveryIdStr, customerId, idsToUse);
+      if (!state) return;
+
       const requestPayload = {
         deliveryId: deliveryIdStr,
         trackingNumber: delivery.trackingNumber,
@@ -104,40 +122,8 @@ export class RiderMatchingService {
         createdAt: delivery.createdAt,
       };
 
-      // Notify each rider via WebSocket and push notification
-      for (const rider of nearbyRiders) {
-        const riderId = rider._id.toString();
-
-        // WS: emit directly to rider's socket(s)
-        this.gateway.emitToUser(riderId, 'delivery:new_request', {
-          ...requestPayload,
-          distanceFromRider: rider.distanceKm,
-        });
-
-        // Push notification
-        if (rider.fcmToken) {
-          this.notificationService
-            .send({
-              recipientId: rider._id,
-              recipientType: NotificationRecipientType.RIDER,
-              title: 'New Delivery Request! 📦',
-              body: `Pickup at ${pickupLocation.address || 'nearby location'} — ${rider.distanceKm.toFixed(1)}km away. Earn ₦${riderPayout.toLocaleString()}`,
-              token: rider.fcmToken,
-              data: {
-                type: 'new_delivery_request',
-                deliveryId: deliveryIdStr,
-                trackingNumber: delivery.trackingNumber,
-              },
-            })
-            .catch((e) =>
-              this.logger.warn(`Failed to push-notify rider ${riderId}: ${e.message}`),
-            );
-        }
-      }
-
-      this.logger.log(
-        `Notified ${nearbyRiders.length} riders for delivery ${deliveryIdStr}`,
-      );
+      await this.sendRequestToRider(riderList[0], requestPayload, pickupLocation, riderPayout);
+      this.logger.log(`Sent request to rider 1/${riderList.length} for delivery ${deliveryIdStr}`);
     } catch (error) {
       this.logger.error(
         `Rider matching failed for delivery ${deliveryIdStr}: ${error.message}`,
@@ -243,5 +229,101 @@ export class RiderMatchingService {
         Math.sin(dLon / 2) ** 2;
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
+  }
+
+  /** Send delivery request to a single rider via WS and FCM */
+  private async sendRequestToRider(
+    rider: RiderDocument & { distanceKm: number },
+    requestPayload: Record<string, any>,
+    pickupLocation: { address?: string },
+    riderPayout: number,
+  ): Promise<void> {
+    const riderId = rider._id.toString();
+    this.gateway.emitToUser(riderId, 'delivery:new_request', {
+      ...requestPayload,
+      distanceFromRider: rider.distanceKm,
+    });
+    if (rider.fcmToken) {
+      this.notificationService
+        .send({
+          recipientId: rider._id,
+          recipientType: NotificationRecipientType.RIDER,
+          title: 'New Delivery Request! 📦',
+          body: `Pickup at ${pickupLocation.address || 'nearby location'} — ${rider.distanceKm.toFixed(1)}km away. Earn ₦${riderPayout.toLocaleString()}`,
+          token: rider.fcmToken,
+          data: {
+            type: 'new_delivery_request',
+            deliveryId: requestPayload.deliveryId,
+            trackingNumber: requestPayload.trackingNumber,
+          },
+        })
+        .catch((e) => this.logger.warn(`Failed to push-notify rider ${riderId}: ${e.message}`));
+    }
+  }
+
+  /** Advance to next rider and send request (called on reject or timeout) */
+  private async advanceToNextRiderAndNotify(deliveryIdStr: string): Promise<void> {
+    const delivery = await this.deliveryModel.findById(deliveryIdStr).lean();
+    if (!delivery || delivery.rider) return; // Already assigned
+    const state = await this.matchingRedis.advanceToNextRider(deliveryIdStr);
+    if (!state) {
+      this.logger.log(`All riders exhausted for delivery ${deliveryIdStr}`);
+      return;
+    }
+    const nextRiderId = state.riderIds[state.riderIndex];
+    const rider = await this.riderModel.findById(nextRiderId).lean();
+    if (!rider) return;
+    const distanceKm = this.calculateDistance(
+      parseFloat(delivery.pickupLocation.latitude),
+      parseFloat(delivery.pickupLocation.longitude),
+      parseFloat(rider.currentLatitude),
+      parseFloat(rider.currentLongitude),
+    );
+    const totalPrice = delivery.pricing?.totalPrice || 0;
+    const { riderPayout, commissionRate } = await this.computeRiderPayout(totalPrice);
+    const requestPayload = {
+      deliveryId: deliveryIdStr,
+      trackingNumber: delivery.trackingNumber,
+      deliveryType: delivery.deliveryType,
+      pickupLocation: delivery.pickupLocation,
+      dropoffLocation: delivery.dropoffLocation,
+      parcelDetails: delivery.parcelDetails,
+      estimatedDistance: delivery.estimatedDistance,
+      estimatedDuration: delivery.estimatedDuration,
+      pricing: delivery.pricing,
+      riderPayout,
+      commissionRate,
+      createdAt: delivery.createdAt,
+    };
+    const riderWithDist = { ...rider, distanceKm } as unknown as RiderDocument & { distanceKm: number };
+    await this.sendRequestToRider(riderWithDist, requestPayload, delivery.pickupLocation, riderPayout);
+    this.logger.log(`Advanced to rider ${state.riderIndex + 1}/${state.riderIds.length} for delivery ${deliveryIdStr}`);
+  }
+
+  onModuleInit() {
+    this.matchingRedis.onMatchingEvent(async (event) => {
+      if (event.type === 'rider_rejected' && event.deliveryId && event.riderId && event.customerId) {
+        await this.matchingRedis.setCooldown(event.riderId, event.customerId);
+        await this.advanceToNextRiderAndNotify(event.deliveryId);
+      }
+      if (event.type === 'rider_accepted' && event.deliveryId) {
+        await this.matchingRedis.deleteMatchingState(event.deliveryId);
+      }
+    });
+  }
+
+  @Interval(10000) // Every 10 seconds
+  async checkMatchingTimeouts() {
+    const ids = await this.matchingRedis.getActiveMatchingDeliveryIds();
+    const now = Date.now();
+    const timeoutMs = REQUEST_TIMEOUT_SEC * 1000;
+    for (const deliveryId of ids) {
+      const state = await this.matchingRedis.getMatchingState(deliveryId);
+      if (!state || state.status !== 'active') continue;
+      if (now - state.sentAt >= timeoutMs) {
+        this.logger.log(`Rider timeout for delivery ${deliveryId}, advancing to next`);
+        await this.advanceToNextRiderAndNotify(deliveryId);
+      }
+    }
   }
 }

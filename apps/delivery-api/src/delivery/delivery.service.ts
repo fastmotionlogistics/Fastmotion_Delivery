@@ -5,6 +5,7 @@ import { DeliveryRequest, DeliveryRequestDocument, Rider, RiderDocument, User, U
 import { DeliveryStatusEnum, DeliveryTypeEnum, DeliveryPaymentStatusEnum, RiderStatusEnum } from '@libs/common';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
 import { NotificationService } from '@libs/common/modules/notification';
+import { DeliveryMatchingRedisService } from '@libs/common/modules/delivery-matching';
 import { NotificationRecipientType } from '@libs/database';
 import {
   AcceptDeliveryDto,
@@ -65,6 +66,7 @@ export class DeliveryService {
     private readonly gateway: DeliveryGateway,
     private readonly notificationService: NotificationService,
     private readonly earningsService: EarningsService,
+    private readonly matchingRedis: DeliveryMatchingRedisService,
   ) {}
 
   // Cached commission config
@@ -365,6 +367,9 @@ export class DeliveryService {
       { type: 'rider_accepted', deliveryId: deliveryId, trackingNumber: delivery.trackingNumber },
     );
 
+    // Notify user-api to stop matching (one-at-a-time flow)
+    await this.matchingRedis.publishEvent({ type: 'rider_accepted', deliveryId });
+
     // Compute rider payout
     const { rate, min } = await this.getCommissionConfig();
     const riderPayout = this.computeRiderPayout(delivery.pricing.totalPrice, rate, min);
@@ -418,6 +423,15 @@ export class DeliveryService {
         delivery._id.toString(),
         'Rider is no longer available. Searching for a new rider...',
       );
+    } else if (!delivery.rider) {
+      // Rider rejected before accepting — notify user-api to advance to next rider (one-at-a-time flow)
+      const customerId = (delivery.customer as any)?.toString?.() || delivery.customer?.toString?.() || '';
+      await this.matchingRedis.publishEvent({
+        type: 'rider_rejected',
+        deliveryId: delivery._id.toString(),
+        riderId: rider._id.toString(),
+        customerId,
+      });
     }
 
     return {

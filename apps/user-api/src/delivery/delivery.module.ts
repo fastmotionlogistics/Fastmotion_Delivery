@@ -32,6 +32,7 @@ import {
 } from '@libs/database';
 import { GatewayModule } from '@libs/common/modules/gateway';
 import { NotificationModule } from '@libs/common/modules/notification';
+import { DeliveryMatchingModule } from '@libs/common/modules/delivery-matching';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { NotificationModule } from '@libs/common/modules/notification';
     ]),
     GatewayModule,
     NotificationModule,
+    DeliveryMatchingModule,
   ],
   controllers: [DeliveryController],
   providers: [DeliveryService, DeliveryRepository, RiderMatchingService],

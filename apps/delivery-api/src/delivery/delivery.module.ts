@@ -14,6 +14,7 @@ import {
 } from '@libs/database';
 import { GatewayModule } from '@libs/common/modules/gateway';
 import { NotificationModule } from '@libs/common/modules/notification';
+import { DeliveryMatchingModule } from '@libs/common/modules/delivery-matching';
 import { EarningsModule } from '../earnings/earnings.module';
 
 @Module({
@@ -26,6 +27,7 @@ import { EarningsModule } from '../earnings/earnings.module';
     ]),
     GatewayModule,
     NotificationModule,
+    DeliveryMatchingModule,
     EarningsModule,
   ],
   controllers: [DeliveryController],

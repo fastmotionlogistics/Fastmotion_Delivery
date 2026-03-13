@@ -289,10 +289,7 @@ export class AuthService {
     if (user) {
       // If they registered via email/password, link Google to their account
       if (!user.isSocialLogin) {
-        await this.userRepository.findOneAndUpdate(
-          { _id: user._id },
-          { isSocialLogin: true },
-        );
+        await this.userRepository.findOneAndUpdate({ _id: user._id }, { isSocialLogin: true });
       }
       // Generate tokens directly (Google-verified email = trusted)
       const refresh_token = await this.generateRefreshToken(user, '');
@@ -347,6 +344,7 @@ export class AuthService {
       firstName: payload.given_name,
       lastName: payload.family_name,
       passwordHash: randomPassword,
+      profilePhotoUrl: payload.picture,
       passwordSalt: passSalt,
       isEmailConfirmed: true,
       isSocialLogin: true,
