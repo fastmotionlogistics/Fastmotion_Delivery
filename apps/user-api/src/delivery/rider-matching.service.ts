@@ -7,6 +7,7 @@ import { Rider, RiderDocument, DeliveryRequest, DeliveryRequestDocument, Pricing
 import { DeliveryGateway } from '@libs/common/modules/gateway';
 import { NotificationService } from '@libs/common/modules/notification';
 import { NotificationRecipientType } from '@libs/database';
+import { DeliveryStatusEnum, DeliveryPaymentStatusEnum } from '@libs/common';
 import {
   DeliveryMatchingRedisService,
   REQUEST_TIMEOUT_SEC,
@@ -261,6 +262,40 @@ export class RiderMatchingService implements OnModuleInit {
     }
   }
 
+  /** Handle unpaid delivery when all riders exhausted: cancel and delete */
+  private async handleUnpaidExhausted(
+    deliveryIdStr: string,
+    delivery: { customer?: any; trackingNumber?: string },
+  ): Promise<void> {
+    await this.matchingRedis.deleteMatchingState(deliveryIdStr);
+    await this.deliveryModel.findByIdAndUpdate(deliveryIdStr, {
+      $set: {
+        status: DeliveryStatusEnum.CANCELLED,
+        cancelledAt: new Date(),
+        cancelledBy: 'system',
+        cancellationReason: 'No riders available',
+      },
+    });
+    this.gateway.emitDeliveryStatusUpdate(deliveryIdStr, DeliveryStatusEnum.CANCELLED, {
+      cancelledBy: 'system',
+    });
+    this.gateway.emitSystemChatMessage(deliveryIdStr, 'No riders were available. Your request has been cancelled.');
+    const customerId = (delivery.customer as any)?.toString?.() || delivery.customer?.toString?.();
+    if (customerId) {
+      this.notificationService
+        .send({
+          recipientId: customerId,
+          recipientType: NotificationRecipientType.USER,
+          title: 'Request Cancelled',
+          body: `No riders were available for your delivery. Your request has been cancelled.`,
+          data: { type: 'delivery_cancelled', deliveryId: deliveryIdStr, trackingNumber: delivery.trackingNumber },
+        })
+        .catch(() => {});
+    }
+    await this.deliveryModel.findByIdAndDelete(deliveryIdStr);
+    this.logger.log(`Cancelled and deleted unpaid delivery ${deliveryIdStr} (riders exhausted)`);
+  }
+
   /** Advance to next rider and send request (called on reject or timeout) */
   private async advanceToNextRiderAndNotify(deliveryIdStr: string): Promise<void> {
     const delivery = await this.deliveryModel.findById(deliveryIdStr).lean();
@@ -268,6 +303,14 @@ export class RiderMatchingService implements OnModuleInit {
     const state = await this.matchingRedis.advanceToNextRider(deliveryIdStr);
     if (!state) {
       this.logger.log(`All riders exhausted for delivery ${deliveryIdStr}`);
+      const isPaid = delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID || delivery.paymentStatus === 'paid';
+      if (isPaid) {
+        // Paid: clear Redis so retry cron can re-init; do not cancel
+        await this.matchingRedis.deleteMatchingState(deliveryIdStr);
+      } else {
+        // Unpaid: cancel and delete the request
+        await this.handleUnpaidExhausted(deliveryIdStr, delivery);
+      }
       return;
     }
     const nextRiderId = state.riderIds[state.riderIndex];
@@ -324,6 +367,35 @@ export class RiderMatchingService implements OnModuleInit {
         this.logger.log(`Rider timeout for delivery ${deliveryId}, advancing to next`);
         await this.advanceToNextRiderAndNotify(deliveryId);
       }
+    }
+  }
+
+  /** Every 2.5 min: retry rider matching for paid deliveries that exhausted all riders */
+  @Interval(150000) // 2.5 minutes
+  async retryPaidExhaustedDeliveries() {
+    try {
+      const deliveries = await this.deliveryModel
+        .find({
+          status: DeliveryStatusEnum.SEARCHING_RIDER,
+          paymentStatus: DeliveryPaymentStatusEnum.PAID,
+          $or: [{ rider: null }, { rider: { $exists: false } }],
+          deliveryType: 'quick',
+        })
+        .select('_id pickupLocation')
+        .lean();
+
+      for (const d of deliveries) {
+        const deliveryIdStr = d._id.toString();
+        const hasActiveMatching = await this.matchingRedis.getMatchingState(deliveryIdStr);
+        if (hasActiveMatching) continue; // Still in active matching, skip
+        this.logger.log(`Retrying rider match for paid delivery ${deliveryIdStr}`);
+        await this.handleQuickDeliveryCreated({
+          deliveryId: d._id,
+          pickupLocation: d.pickupLocation,
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`retryPaidExhaustedDeliveries error: ${e?.message || e}`);
     }
   }
 }
