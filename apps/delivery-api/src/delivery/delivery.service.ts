@@ -154,6 +154,19 @@ export class DeliveryService {
         .sort((a, b) => (a as any).distanceFromRider - (b as any).distanceFromRider);
     }
 
+    // Filter to only include deliveries currently offered to THIS rider (one-at-a-time matching)
+    const riderIdStr = rider._id.toString();
+    const offeredToRider: any[] = [];
+    for (const d of results) {
+      const deliveryIdStr = (d as any)._id?.toString?.() || (d as any).id?.toString?.();
+      if (!deliveryIdStr) continue;
+      const state = await this.matchingRedis.getMatchingState(deliveryIdStr);
+      if (state && state.status === 'active' && state.riderIds[state.riderIndex] === riderIdStr) {
+        offeredToRider.push(d);
+      }
+    }
+    results = offeredToRider;
+
     // Attach riderPayout to each delivery
     const { rate, min } = await this.getCommissionConfig();
     const withPayout = results.map(d => ({
