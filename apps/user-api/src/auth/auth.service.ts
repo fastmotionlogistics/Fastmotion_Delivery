@@ -264,7 +264,7 @@ export class AuthService {
   private async verifyGoogleIdToken(idToken: string) {
     try {
       const clientId = this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_ID');
-      const client = new OAuth2Client(clientId);
+      const client = new OAuth2Client({ clientId: clientId });
       const ticket = await client.verifyIdToken({
         idToken,
         audience: clientId,

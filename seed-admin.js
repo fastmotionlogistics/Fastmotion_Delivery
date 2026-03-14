@@ -2,14 +2,30 @@
  * FastMotion - Database Seed Script
  * Seeds: Super Admin + admin roles + sample rider + pricing data
  *
- * Usage: node seed-admin.js
+ * Usage:
+ *   node seed-admin.js              # Skip if records exist
+ *   node seed-admin.js --override   # Delete existing seed data and re-seed everything
+ *
+ * Requires: MONGODB_URI env var (or set in .env via dotenv)
  */
 
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcryptjs');
 
 // ── Configuration ─────────────────────────────────────────
-const MONGODB_URI = process.env.MONGODB_URI;
+const DEFAULT_URI = 'mongodb://localhost:27017/fastmotion';
+const raw = process.env.MONGODB_URI || DEFAULT_URI;
+const MONGODB_URI = (typeof raw === 'string' ? raw : String(raw || DEFAULT_URI)).trim();
+
+if (typeof MONGODB_URI !== 'string' || !MONGODB_URI.startsWith('mongodb')) {
+  console.error('❌ MONGODB_URI must be a valid MongoDB connection string (e.g. mongodb://localhost:27017/fastmotion)');
+  process.exit(1);
+}
+
+const OVERRIDE = process.argv.includes('--override') || process.argv.includes('--force');
+if (OVERRIDE) console.log('🔄 Override mode: replacing existing seed data\n');
 
 // ── All Permission Enums ─────────────────────────────────
 const PERMISSIONS = {
@@ -27,6 +43,7 @@ const PERMISSIONS = {
   USER_EDIT: 'user:edit',
   USER_SUSPEND: 'user:suspend',
   FINANCE_VIEW: 'finance:view',
+  FINANCE_MANAGE: 'finance:manage',
   FINANCE_REFUND: 'finance:refund',
   FINANCE_PRICE_ADJUST: 'finance:price_adjust',
   FINANCE_EARNINGS: 'finance:earnings',
@@ -65,6 +82,7 @@ const ROLE_PERMISSIONS = {
     PERMISSIONS.USER_EDIT,
     PERMISSIONS.USER_SUSPEND,
     PERMISSIONS.FINANCE_VIEW,
+    PERMISSIONS.FINANCE_MANAGE,
     PERMISSIONS.FINANCE_REFUND,
     PERMISSIONS.FINANCE_PRICE_ADJUST,
     PERMISSIONS.PRICING_VIEW,
@@ -145,16 +163,30 @@ async function main() {
     const locationZonesCollection = db.collection('location_zones');
     const weightPricingCollection = db.collection('weight_pricing');
     const timePricingCollection = db.collection('time_pricing');
+    const itemCategoriesCollection = db.collection('item_categories');
+    const specialHandlingCollection = db.collection('special_handling');
 
     // ══════════════════════════════════════════
     //  1. SEED ADMINS
     // ══════════════════════════════════════════
 
-    const existingSuperAdmin = await adminsCollection.findOne({ role: 'super_admin' });
+    const SEED_ADMIN_EMAILS = [
+      'superadmin@fastmotion.com',
+      'admin@fastmotion.com',
+      'ops@fastmotion.com',
+      'fleet@fastmotion.com',
+      'support@fastmotion.com',
+      'finance@fastmotion.com',
+    ];
 
-    if (existingSuperAdmin) {
-      console.log('⚠️  Super admin already exists:', existingSuperAdmin.email);
-    } else {
+    let existingSuperAdmin = await adminsCollection.findOne({ role: 'super_admin' });
+    if (OVERRIDE && existingSuperAdmin) {
+      await adminsCollection.deleteMany({ email: { $in: SEED_ADMIN_EMAILS } });
+      existingSuperAdmin = null;
+      console.log('🔄 Removed existing seed admins');
+    }
+
+    if (!existingSuperAdmin) {
       const superAdminPwd = await hashPassword('Password@123');
       const superAdminId = new ObjectId();
 
@@ -233,7 +265,13 @@ async function main() {
     //  2. SEED SAMPLE RIDER
     // ══════════════════════════════════════════
 
-    const existingRider = await ridersCollection.findOne({ email: 'rider1@fastmotion.com' });
+    let existingRider = await ridersCollection.findOne({ email: 'rider1@fastmotion.com' });
+
+    if (OVERRIDE && existingRider) {
+      await ridersCollection.deleteOne({ email: 'rider1@fastmotion.com' });
+      existingRider = null;
+      console.log('\n🔄 Removed existing sample rider');
+    }
 
     if (existingRider) {
       console.log('\n⚠️  Sample rider already exists:', existingRider.email);
@@ -280,14 +318,23 @@ async function main() {
     //  3. SEED PRICING CONFIG
     // ══════════════════════════════════════════
 
-    const existingConfig = await pricingConfigCollection.findOne({ isActive: true });
+    let existingConfig = await pricingConfigCollection.findOne({ isActive: true });
+
+    if (OVERRIDE && existingConfig) {
+      await pricingConfigCollection.deleteMany({});
+      await locationZonesCollection.deleteMany({});
+      await weightPricingCollection.deleteMany({});
+      await timePricingCollection.deleteMany({});
+      existingConfig = null;
+      console.log('\n🔄 Removed existing pricing data');
+    }
 
     if (existingConfig) {
       console.log('\n⚠️  Active pricing config already exists, skipping pricing seed');
     } else {
       console.log('\n── Seeding Pricing Data ──');
 
-      // 3a. Pricing Config
+      // 3a. Pricing Config (aligned with admin-api PricingConfig schema)
       await pricingConfigCollection.insertOne({
         _id: new ObjectId(),
         currency: 'NGN',
@@ -307,6 +354,18 @@ async function main() {
         cancellationFeeBeforeAccept: 0,
         cancellationFeeAfterAccept: 300,
         cancellationFeeAfterPickupPercentage: 0.5,
+        sizeFees: { small: 0, medium: 200, large: 500, extra_large: 1000 },
+        categoryMultipliers: {
+          documents: 1.0,
+          clothes: 1.0,
+          food: 1.1,
+          electronics: 1.3,
+          fragile: 1.5,
+          other: 1.0,
+        },
+        riderCommissionPercentage: 0.8,
+        minimumRiderPayout: 100,
+        fctDevelopmentLevy: 30,
         reschedulingFee: 200,
         isActive: true,
         effectiveFrom: new Date(),
@@ -653,6 +712,153 @@ async function main() {
     }
 
     // ══════════════════════════════════════════
+    //  4. SEED ITEM CATEGORIES & SPECIAL HANDLING (admin catalog)
+    // ══════════════════════════════════════════
+
+    // const itemCategoriesCollection = db.collection('item_categories');
+    // const specialHandlingCollection = db.collection('special_handling');
+
+    const categories = [
+      {
+        slug: 'documents',
+        name: 'Documents',
+        emoji: '📄',
+        description: 'Letters, contracts, certificates',
+        priceMultiplier: 1.0,
+        additionalFee: 0,
+        priceLabel: null,
+        status: 'active',
+        sortOrder: 1,
+      },
+      {
+        slug: 'clothes',
+        name: 'Clothes',
+        emoji: '👕',
+        description: 'Clothing and fabric items',
+        priceMultiplier: 1.0,
+        additionalFee: 0,
+        priceLabel: null,
+        status: 'active',
+        sortOrder: 2,
+      },
+      {
+        slug: 'food',
+        name: 'Food Items',
+        emoji: '🍔',
+        description: 'Prepared meals, groceries',
+        priceMultiplier: 1.2,
+        additionalFee: 0,
+        priceLabel: '+20%',
+        status: 'active',
+        sortOrder: 3,
+      },
+      {
+        slug: 'electronics',
+        name: 'Electronics',
+        emoji: '📱',
+        description: 'Phones, laptops, gadgets',
+        priceMultiplier: 1.5,
+        additionalFee: 0,
+        priceLabel: '+50%',
+        status: 'active',
+        sortOrder: 4,
+      },
+      {
+        slug: 'fragile',
+        name: 'Fragile Items',
+        emoji: '🏺',
+        description: 'Glass, ceramics, delicate items',
+        priceMultiplier: 1.8,
+        additionalFee: 0,
+        priceLabel: '+80%',
+        status: 'active',
+        sortOrder: 5,
+      },
+      {
+        slug: 'other',
+        name: 'Other',
+        emoji: '📦',
+        description: 'General items',
+        priceMultiplier: 1.1,
+        additionalFee: 0,
+        priceLabel: '+10%',
+        status: 'active',
+        sortOrder: 6,
+      },
+    ];
+
+    const specialHandling = [
+      {
+        slug: 'fragile',
+        name: 'Fragile',
+        description: 'Handle with extra care',
+        additionalFee: 300,
+        priceMultiplier: 1.0,
+        priceLabel: '+₦300',
+        bgColor: '#FEE2E2',
+        textColor: '#DC2626',
+        status: 'active',
+        sortOrder: 1,
+      },
+      {
+        slug: 'keep_upright',
+        name: 'Keep Upright',
+        description: 'Must remain upright during transit',
+        additionalFee: 200,
+        priceMultiplier: 1.0,
+        priceLabel: '+₦200',
+        bgColor: '#F3E8FF',
+        textColor: '#7C3AED',
+        status: 'active',
+        sortOrder: 2,
+      },
+      {
+        slug: 'perishable',
+        name: 'Perishable',
+        description: 'Time-sensitive, may spoil',
+        additionalFee: 500,
+        priceMultiplier: 1.0,
+        priceLabel: '+₦500',
+        bgColor: '#DBEAFE',
+        textColor: '#2563EB',
+        status: 'active',
+        sortOrder: 3,
+      },
+      {
+        slug: 'do_not_stack',
+        name: 'Do Not Stack',
+        description: 'Nothing should be placed on top',
+        additionalFee: 150,
+        priceMultiplier: 1.0,
+        priceLabel: '+₦150',
+        bgColor: '#FFF7ED',
+        textColor: '#EA580C',
+        status: 'active',
+        sortOrder: 4,
+      },
+    ];
+
+    for (const cat of categories) {
+      await itemCategoriesCollection.updateOne(
+        { slug: cat.slug },
+        { $set: { ...cat, updatedAt: new Date() }, $setOnInsert: { _id: new ObjectId(), createdAt: new Date() } },
+        { upsert: true },
+      );
+    }
+    const catCount = await itemCategoriesCollection.countDocuments({ status: 'active' });
+    if (catCount > 0) console.log(`✅ ${catCount} item categories seeded`);
+
+    for (const sh of specialHandling) {
+      await specialHandlingCollection.updateOne(
+        { slug: sh.slug },
+        { $set: { ...sh, updatedAt: new Date() }, $setOnInsert: { _id: new ObjectId(), createdAt: new Date() } },
+        { upsert: true },
+      );
+    }
+    const shCount = await specialHandlingCollection.countDocuments({ status: 'active' });
+    if (shCount > 0) console.log(`✅ ${shCount} special handling options seeded`);
+
+    // ══════════════════════════════════════════
     //  SUMMARY
     // ══════════════════════════════════════════
 
@@ -662,6 +868,8 @@ async function main() {
     const zoneCount = await locationZonesCollection.countDocuments({ status: 'active' });
     const weightCount = await weightPricingCollection.countDocuments({ status: 'active' });
     const timeCount = await timePricingCollection.countDocuments({ status: 'active' });
+    // const catCount = await db.collection('item_categories').countDocuments({ status: 'active' });
+    // const shCount = await db.collection('special_handling').countDocuments({ status: 'active' });
 
     console.log('\n════════════════════════════════════════');
     console.log('  SEED COMPLETE');
@@ -672,11 +880,13 @@ async function main() {
     console.log(`  Location Zones:  ${zoneCount} active`);
     console.log(`  Weight Tiers:    ${weightCount} active`);
     console.log(`  Time Slots:      ${timeCount} active`);
+    console.log(`  Item Categories: ${catCount} active`);
+    console.log(`  Special Handling: ${shCount} active`);
     console.log('');
     console.log('  Admin Roles:');
-    console.log('    • super_admin       — superadmin@fastmotion.com');
-    console.log('    • admin             — admin@fastmotion.com');
-    console.log('    • operations_mgr    — ops@fastmotion.com');
+    console.log('    • super_admin        — superadmin@fastmotion.com');
+    console.log('    • admin              — admin@fastmotion.com');
+    console.log('    • operations_manager — ops@fastmotion.com');
     console.log('    • fleet_manager     — fleet@fastmotion.com');
     console.log('    • support_agent     — support@fastmotion.com');
     console.log('    • finance_manager   — finance@fastmotion.com');
