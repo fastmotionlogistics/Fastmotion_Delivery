@@ -11,14 +11,7 @@ import * as bcrypt from 'bcryptjs';
 import { Rider, RefreshToken } from '@libs/database';
 import { GenerateOtp, generateRandomString, phoneFormatter, timeZoneMoment, RiderStatusEnum } from '@libs/common';
 import { JwtTokenService } from './strategies/jwt.service';
-import {
-  LoginRiderDto,
-  VerifyBikeDto,
-  ChangePasswordDto,
-  ForgotPasswordDto,
-  ResetPasswordDto,
-  LogoutDto,
-} from './dto';
+import { LoginRiderDto, VerifyBikeDto, ChangePasswordDto, ForgotPasswordDto, ResetPasswordDto, LogoutDto, BindDeviceDto } from './dto';
 
 @Injectable()
 export class AuthService {
@@ -108,10 +101,13 @@ export class AuthService {
           vehiclePlateNumber: rider.vehiclePlateNumber,
           verificationStatus: rider.verificationStatus,
           isVehicleBound: rider.isVehicleBound,
+
           boundVehicleId: rider.boundVehicleId,
           isOnline: rider.isOnline,
           status: rider.status,
         },
+        // True only when binding is enforced AND admin has cleared the bound device
+        requiresDeviceBound: rider.enforceDeviceBinding && !rider.boundDeviceId,
         // Tell the app whether bike verification is needed
         requiresBikeVerification: !rider.isVehicleBound || !rider.boundVehicleId,
       },
@@ -212,10 +208,7 @@ export class AuthService {
     });
 
     // Update last login
-    await this.riderModel.updateOne(
-      { _id: rider._id },
-      { $set: { lastLoginDate: new Date() } },
-    );
+    await this.riderModel.updateOne({ _id: rider._id }, { $set: { lastLoginDate: new Date() } });
 
     return {
       success: true,
@@ -239,6 +232,41 @@ export class AuthService {
           status: rider.status,
         },
         requiresBikeVerification: !rider.isVehicleBound || !rider.boundVehicleId,
+      },
+    };
+  }
+
+  // ════════════════════════════════════════════
+  //  BIND DEVICE (rider re-registers after admin unbind)
+  // ════════════════════════════════════════════
+
+  async bindDevice(rider: Rider, body: BindDeviceDto) {
+    // Only permitted when admin has explicitly cleared boundDeviceId.
+    // If a device is already bound the rider must contact admin — they
+    // cannot unilaterally switch to a different device.
+    if (rider.boundDeviceId) {
+      throw new ForbiddenException(
+        'A device is already bound to your account. Contact admin to unbind your current device before registering a new one.',
+      );
+    }
+
+    await this.riderModel.updateOne(
+      { _id: rider._id },
+      {
+        $set: {
+          boundDeviceId: body.deviceId,
+          boundDeviceModel: body.deviceModel || null,
+          deviceBoundAt: new Date(),
+        },
+      },
+    );
+
+    return {
+      success: true,
+      message: 'Device bound successfully. Your account is now linked to this device.',
+      data: {
+        deviceModel: body.deviceModel || null,
+        deviceBoundAt: new Date(),
       },
     };
   }
@@ -295,9 +323,7 @@ export class AuthService {
       query = { email: body.emailOrPhone.toLowerCase().trim() };
     }
 
-    const rider = await this.riderModel
-      .findOne(query)
-      .select('+resetPasswordOtp +resetPasswordOtpExpiry');
+    const rider = await this.riderModel.findOne(query).select('+resetPasswordOtp +resetPasswordOtpExpiry');
 
     if (!rider) {
       throw new NotFoundException('No account found');

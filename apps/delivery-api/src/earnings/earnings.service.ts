@@ -53,7 +53,7 @@ export class EarningsService {
 
     // Get active pricing config for commission rate
     const config = await this.pricingModel.findOne({ isActive: true }).lean();
-    const commissionRate = config?.riderCommissionPercentage ?? 0.80;
+    const commissionRate = config?.riderCommissionPercentage ?? 0.70;
     const minPayout = config?.minimumRiderPayout ?? 100;
 
     const totalPrice = delivery.pricing?.totalPrice || 0;

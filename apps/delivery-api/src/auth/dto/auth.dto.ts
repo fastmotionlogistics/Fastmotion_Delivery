@@ -112,6 +112,19 @@ export class ResetPasswordDto {
   confirmPassword: string;
 }
 
+// ── Bind Device (after admin unbinds — rider re-registers their device) ──
+export class BindDeviceDto {
+  @ApiProperty({ example: 'a1b2c3d4-e5f6-7890', description: 'Unique device identifier to bind' })
+  @IsString()
+  @IsNotEmpty()
+  deviceId: string;
+
+  @ApiPropertyOptional({ example: 'iPhone 15 Pro • iOS 17', description: 'Device model for display reference' })
+  @IsString()
+  @IsOptional()
+  deviceModel?: string;
+}
+
 // ── Logout ───────────────────────────────────────────────
 export class LogoutDto {
   @ApiPropertyOptional({ example: 'refresh_token_here' })

@@ -5,4 +5,5 @@ export {
   ForgotPasswordDto,
   ResetPasswordDto,
   LogoutDto,
+  BindDeviceDto,
 } from './auth.dto';

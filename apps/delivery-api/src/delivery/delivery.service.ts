@@ -1,7 +1,16 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { DeliveryRequest, DeliveryRequestDocument, Rider, RiderDocument, User, UserDocument, PricingConfig, PricingConfigDocument } from '@libs/database';
+import {
+  DeliveryRequest,
+  DeliveryRequestDocument,
+  Rider,
+  RiderDocument,
+  User,
+  UserDocument,
+  PricingConfig,
+  PricingConfigDocument,
+} from '@libs/database';
 import { DeliveryStatusEnum, DeliveryTypeEnum, DeliveryPaymentStatusEnum, RiderStatusEnum } from '@libs/common';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
 import { NotificationService } from '@libs/common/modules/notification';
@@ -77,8 +86,11 @@ export class DeliveryService {
     if (this._commissionCache && Date.now() - this._commissionCache.ts < 5 * 60 * 1000) {
       return { rate: this._commissionCache.rate, min: this._commissionCache.min };
     }
-    const config = await this.pricingModel.findOne({ isActive: true }).select('riderCommissionPercentage minimumRiderPayout').lean();
-    const rate = config?.riderCommissionPercentage ?? 0.80;
+    const config = await this.pricingModel
+      .findOne({ isActive: true })
+      .select('riderCommissionPercentage minimumRiderPayout')
+      .lean();
+    const rate = config?.riderCommissionPercentage ?? 0.7;
     const min = config?.minimumRiderPayout ?? 100;
     this._commissionCache = { rate, min, ts: Date.now() };
     return { rate, min };
@@ -169,7 +181,7 @@ export class DeliveryService {
 
     // Attach riderPayout to each delivery
     const { rate, min } = await this.getCommissionConfig();
-    const withPayout = results.map(d => ({
+    const withPayout = results.map((d) => ({
       ...d,
       riderPayout: this.computeRiderPayout(d.pricing?.totalPrice || 0, rate, min),
     }));
@@ -208,7 +220,7 @@ export class DeliveryService {
 
     // Attach riderPayout
     const { rate, min } = await this.getCommissionConfig();
-    const withPayout = deliveries.map(d => ({
+    const withPayout = deliveries.map((d) => ({
       ...d,
       riderPayout: this.computeRiderPayout(d.pricing?.totalPrice || 0, rate, min),
     }));
@@ -247,7 +259,7 @@ export class DeliveryService {
 
     // Attach riderPayout
     const { rate, min } = await this.getCommissionConfig();
-    const withPayout = data.map(d => ({
+    const withPayout = data.map((d) => ({
       ...d,
       riderPayout: this.computeRiderPayout(d.pricing?.totalPrice || 0, rate, min),
     }));

@@ -24,7 +24,7 @@ export class ProfileService {
     return {
       success: true,
       message: 'Profile retrieved',
-      data: rider,
+      data: { ...rider, requiresDeviceBound: !rider.boundDeviceId || rider.boundDeviceModel },
     };
   }
 
@@ -129,10 +129,7 @@ export class ProfileService {
   }
 
   async updateFcmToken(rider: Rider, body: UpdateFcmTokenDto) {
-    await this.riderModel.updateOne(
-      { _id: rider._id },
-      { $set: { fcmToken: body.fcmToken } },
-    );
+    await this.riderModel.updateOne({ _id: rider._id }, { $set: { fcmToken: body.fcmToken } });
 
     return {
       success: true,

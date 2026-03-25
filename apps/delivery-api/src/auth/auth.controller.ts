@@ -13,6 +13,7 @@ import {
   ForgotPasswordDto,
   ResetPasswordDto,
   LogoutDto,
+  BindDeviceDto,
 } from './dto';
 import { Rider } from '@libs/database';
 import { RiderLocalAuthGuard, RiderJwtAuthGuard } from './guards';
@@ -49,6 +50,19 @@ export class AuthController {
   @Post('change-password')
   async changePassword(@CurrentRider() rider: Rider, @Body() body: ChangePasswordDto) {
     return await this.authService.changePassword(rider, body);
+  }
+
+  @ApiOperation({
+    summary: 'Bind device to account',
+    description:
+      'Called after admin unbinds the rider\'s device. The rider confirms they want to register their current device. Rejected if a device is already bound — admin must unbind first.',
+  })
+  @ApiBody({ type: BindDeviceDto })
+  @UseGuards(RiderJwtAuthGuard)
+  @ApiBearerAuth()
+  @Post('bind-device')
+  async bindDevice(@CurrentRider() rider: Rider, @Body() body: BindDeviceDto) {
+    return await this.authService.bindDevice(rider, body);
   }
 
   @ApiOperation({ summary: 'Forgot password — send OTP' })
