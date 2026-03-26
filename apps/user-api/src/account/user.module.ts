@@ -5,7 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseModule, User, UserSchema, SavedAddress, SavedAddressSchema } from '@libs/database';
 import { HttpModule } from '@nestjs/axios';
-import { UploadFileService } from '@libs/common';
+import { NotificationModule, UploadFileService } from '@libs/common';
 import { AccountUserRepository } from './repository';
 
 @Module({
@@ -15,6 +15,7 @@ import { AccountUserRepository } from './repository';
       { name: SavedAddress.name, schema: SavedAddressSchema },
     ]),
     HttpModule,
+    NotificationModule,
 
     JwtModule.registerAsync({
       useFactory: (configService: ConfigService) => {

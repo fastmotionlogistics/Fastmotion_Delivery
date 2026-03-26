@@ -21,10 +21,11 @@ export class ProfileService {
   ) {}
 
   async getProfile(rider: Rider) {
+    const plain = (rider as any).toObject?.() ?? rider;
     return {
       success: true,
       message: 'Profile retrieved',
-      data: { ...rider, requiresDeviceBound: !rider.boundDeviceId || rider.boundDeviceModel },
+      data: { ...plain, requiresDeviceBound: rider.enforceDeviceBinding && !rider.boundDeviceId },
     };
   }
 

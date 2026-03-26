@@ -4,14 +4,19 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { updateFCMDto } from '@libs/common';
+import * as bcrypt from 'bcryptjs';
+import { GenerateOtp, updateFCMDto } from '@libs/common';
+import { EmailNotificationService } from '@libs/common';
 import { AccountUserRepository } from './repository';
-import { UpdateProfileDto, UpdateNotificationPreferencesDto, CreateSavedAddressDto, UpdateSavedAddressDto } from './dto';
+import { UpdateProfileDto, UpdateNotificationPreferencesDto, CreateSavedAddressDto, ChangePasswordConfirmDto } from './dto';
 import { Types } from 'mongoose';
 
 @Injectable()
 export class AccountService {
-  constructor(private readonly userRepository: AccountUserRepository) {}
+  constructor(
+    private readonly userRepository: AccountUserRepository,
+    private readonly emailService: EmailNotificationService,
+  ) {}
 
   /**
    * Get full user profile
@@ -221,6 +226,72 @@ export class AccountService {
       success: true,
       message: 'Address deleted',
     };
+  }
+
+  // ═══════════ CHANGE PASSWORD ═══════════
+
+  async requestChangePasswordOtp(userId: string) {
+    const user = await this.userRepository.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.email) throw new BadRequestException('No email address on file');
+
+    const { otp, expiry } = GenerateOtp();
+
+    await this.userRepository.model.updateOne(
+      { _id: userId },
+      { $set: { resetPasswordOtp: otp, resetPasswordOtpExpiry: expiry } },
+    );
+
+    await this.emailService.sendEmail({
+      to: user.email,
+      subject: 'FastMotion — Change Password OTP',
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;">
+          <h2 style="color:#1f2937;margin-bottom:8px;">Change Password</h2>
+          <p style="color:#6b7280;">Use the OTP below to confirm your password change. It expires in <strong>10 minutes</strong>.</p>
+          <div style="background:#f3f4f6;border-radius:8px;padding:20px;text-align:center;margin:24px 0;">
+            <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#111827;">${otp}</span>
+          </div>
+          <p style="color:#9ca3af;font-size:13px;">If you did not request a password change, you can safely ignore this email.</p>
+        </div>
+      `,
+    });
+
+    return {
+      success: true,
+      message: `OTP sent to ${user.email}`,
+    };
+  }
+
+  async confirmChangePassword(userId: string, body: ChangePasswordConfirmDto) {
+    if (body.newPassword !== body.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
+    const user = await this.userRepository.model
+      .findById(userId)
+      .select('+resetPasswordOtp +resetPasswordOtpExpiry')
+      .lean();
+
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.resetPasswordOtp) throw new BadRequestException('No OTP requested');
+    if (user.resetPasswordOtp !== body.otp) throw new BadRequestException('Invalid OTP');
+    if (new Date() > new Date(user.resetPasswordOtpExpiry)) {
+      throw new BadRequestException('OTP has expired');
+    }
+
+    const salt = await bcrypt.genSalt();
+    const passwordHash = await bcrypt.hash(body.newPassword, salt);
+
+    await this.userRepository.model.updateOne(
+      { _id: userId },
+      {
+        $set: { passwordHash, passwordSalt: salt },
+        $unset: { resetPasswordOtp: '', resetPasswordOtpExpiry: '' },
+      },
+    );
+
+    return { success: true, message: 'Password changed successfully' };
   }
 
   /**

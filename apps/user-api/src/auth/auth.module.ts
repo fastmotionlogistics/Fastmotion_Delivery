@@ -19,6 +19,8 @@ import {
 } from '@libs/database';
 import { JwtTokenService } from './strategies/jwt.service';
 import { AuthUserRepository, RefreshTokenRepository } from './repository';
+import { NotificationModule } from '@libs/common';
+import { AuthNotificationListener } from './listeners/auth-notification.listener';
 
 @Module({
   imports: [
@@ -34,6 +36,7 @@ import { AuthUserRepository, RefreshTokenRepository } from './repository';
       inject: [ConfigService],
     }),
     LoggerModule,
+    NotificationModule,
     DatabaseModule,
     DatabaseModule.forFeature([
       { name: User.name, schema: UserSchema },
@@ -46,7 +49,7 @@ import { AuthUserRepository, RefreshTokenRepository } from './repository';
     ]),
   ],
   controllers: [AuthController],
-  providers: [JwtStrategy, LocalStrategy, RefreshTokenRepository, AuthUserRepository, JwtTokenService, AuthService],
+  providers: [JwtStrategy, LocalStrategy, RefreshTokenRepository, AuthUserRepository, JwtTokenService, AuthService, AuthNotificationListener],
   exports: [AuthService],
 })
 export class AuthModule {}

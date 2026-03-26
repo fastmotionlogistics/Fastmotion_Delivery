@@ -1,5 +1,5 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsBoolean, IsDateString, IsEnum, MaxLength, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsString, IsOptional, IsBoolean, IsDateString, IsEnum, MaxLength, Matches, MinLength, IsNotEmpty } from 'class-validator';
 import { Gender } from '@libs/common';
 
 /**
@@ -86,4 +86,25 @@ export class UpdateNotificationPreferencesDto {
   @IsBoolean()
   @IsOptional()
   promoNotification?: boolean;
+}
+
+export class ChangePasswordRequestDto {
+  // no body needed — OTP is sent to the authenticated user's email
+}
+
+export class ChangePasswordConfirmDto {
+  @ApiProperty({ example: '123456' })
+  @IsString()
+  @IsNotEmpty()
+  otp: string;
+
+  @ApiProperty({ example: 'NewPassword@123' })
+  @IsString()
+  @MinLength(8)
+  newPassword: string;
+
+  @ApiProperty({ example: 'NewPassword@123' })
+  @IsString()
+  @MinLength(8)
+  confirmPassword: string;
 }

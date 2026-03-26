@@ -18,7 +18,7 @@ import { User } from '@libs/database';
 import { CurrentUser, JwtAuthGuard, SetRolesMetaData } from '@libs/auth';
 import { FileUploadOptions, Role, updateFCMDto, UploadFileService } from '@libs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { UpdateProfileDto, UpdateNotificationPreferencesDto, CreateSavedAddressDto } from './dto';
+import { UpdateProfileDto, UpdateNotificationPreferencesDto, CreateSavedAddressDto, ChangePasswordConfirmDto } from './dto';
 
 @ApiTags('Account')
 @Controller('account')
@@ -123,5 +123,22 @@ export class AccountController {
   @Post('delete')
   async deleteAccount(@CurrentUser() user: User) {
     return await this.accountService.deleteAccount(user._id.toString());
+  }
+
+  // ═══════════ CHANGE PASSWORD ═══════════
+
+  @ApiOperation({ summary: 'Request OTP to change password (sent to registered email)' })
+  @SetRolesMetaData(Role.NORMAL_USER)
+  @Post('change-password/request')
+  async requestChangePasswordOtp(@CurrentUser() user: User) {
+    return await this.accountService.requestChangePasswordOtp(user._id.toString());
+  }
+
+  @ApiOperation({ summary: 'Confirm password change with OTP' })
+  @ApiBody({ type: ChangePasswordConfirmDto })
+  @SetRolesMetaData(Role.NORMAL_USER)
+  @Post('change-password/confirm')
+  async confirmChangePassword(@CurrentUser() user: User, @Body() body: ChangePasswordConfirmDto) {
+    return await this.accountService.confirmChangePassword(user._id.toString(), body);
   }
 }

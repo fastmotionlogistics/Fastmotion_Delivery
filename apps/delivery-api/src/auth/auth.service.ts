@@ -11,7 +11,15 @@ import * as bcrypt from 'bcryptjs';
 import { Rider, RefreshToken } from '@libs/database';
 import { GenerateOtp, generateRandomString, phoneFormatter, timeZoneMoment, RiderStatusEnum } from '@libs/common';
 import { JwtTokenService } from './strategies/jwt.service';
-import { LoginRiderDto, VerifyBikeDto, ChangePasswordDto, ForgotPasswordDto, ResetPasswordDto, LogoutDto, BindDeviceDto } from './dto';
+import {
+  LoginRiderDto,
+  VerifyBikeDto,
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+  LogoutDto,
+  BindDeviceDto,
+} from './dto';
 
 @Injectable()
 export class AuthService {
@@ -136,30 +144,32 @@ export class AuthService {
           verified: true,
         },
       };
+    } else {
+      throw new BadRequestException('NO Bike assigned to your account. Contact admin to bind ur Bike.');
     }
 
     // First time — bind the bike
-    await this.riderModel.updateOne(
-      { _id: rider._id },
-      {
-        $set: {
-          isVehicleBound: true,
-          boundVehicleId: body.bikeId.toUpperCase(),
-          vehicleBoundAt: new Date(),
-          vehiclePlateNumber: body.vehiclePlateNumber || rider.vehiclePlateNumber,
-        },
-      },
-    );
+    // await this.riderModel.updateOne(
+    //   { _id: rider._id },
+    //   {
+    //     $set: {
+    //       isVehicleBound: true,
+    //       boundVehicleId: body.bikeId.toUpperCase(),
+    //       vehicleBoundAt: new Date(),
+    //       vehiclePlateNumber: body.vehiclePlateNumber || rider.vehiclePlateNumber,
+    //     },
+    //   },
+    // );
 
-    return {
-      success: true,
-      message: 'Bike verified and bound to your account',
-      data: {
-        bikeId: body.bikeId.toUpperCase(),
-        vehiclePlateNumber: body.vehiclePlateNumber || rider.vehiclePlateNumber,
-        verified: true,
-      },
-    };
+    // return {
+    //   success: true,
+    //   message: 'Bike verified and bound to your account',
+    //   data: {
+    //     bikeId: body.bikeId.toUpperCase(),
+    //     vehiclePlateNumber: body.vehiclePlateNumber || rider.vehiclePlateNumber,
+    //     verified: true,
+    //   },
+    // };
   }
 
   // ════════════════════════════════════════════
@@ -247,6 +257,18 @@ export class AuthService {
     if (rider.boundDeviceId) {
       throw new ForbiddenException(
         'A device is already bound to your account. Contact admin to unbind your current device before registering a new one.',
+      );
+    }
+
+    // Prevent one device from being bound to multiple accounts
+    const existingBinding = await this.riderModel
+      .findOne({ boundDeviceId: body.deviceId, _id: { $ne: rider._id } })
+      .select('_id')
+      .lean();
+
+    if (existingBinding) {
+      throw new ForbiddenException(
+        'This device is already registered to another rider account. Contact admin if you believe this is an error.',
       );
     }
 

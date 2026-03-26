@@ -45,7 +45,7 @@ export class NotificationService {
     await Promise.all(
       channels.map(async (ch) => {
         if (ch === NotificationChannel.EMAIL && email) {
-          await this.emailService.sendEmail(email, title, body, data);
+          await this.emailService.sendEmail({ to: email, subject: title, text: body });
         }
         if (ch === NotificationChannel.FIREBASE && input?.token) {
           await this.firebaseService.sendFirebase(input?.token, title, body, {

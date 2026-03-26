@@ -26,6 +26,8 @@ import { User } from '@libs/database';
 import { JwtTokenService } from './strategies/jwt.service';
 import { GenerateOtp, generateRandomString, Role, timeZoneMoment, phoneFormatter } from '@libs/common';
 import { AuthUserRepository, RefreshTokenRepository } from './repository';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AUTH_EVENTS } from './events/auth.events';
 
 // Utility functions - should be moved to @libs/common/utils later
 
@@ -37,6 +39,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     // private readonly jwtService: JwtService,
     private readonly jwtTokenService: JwtTokenService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async registerUser(body: RegisterShopUserDto) {
@@ -74,7 +77,7 @@ export class AuthService {
         phone: formattedPhone,
         passwordHash,
         passwordSalt: passSalt,
-        emailConfirmationCode: otp,
+        emailConfirmationCode: `${otp}`,
         emailConfirmationExpiryDate: expiry,
         isEmailConfirmed: false,
         isPhoneConfirmed: false,
@@ -82,12 +85,12 @@ export class AuthService {
         type: Role.NORMAL_USER,
       });
 
-      // TODO: Send OTP via email using notification service
-      // await this.notificationService.sendEmail({
-      //   to: body.email,
-      //   subject: 'FastMotion - Verify your email',
-      //   message: `Your FastMotion verification code is: ${otp}. Valid for 10 minutes.`,
-      // });
+      this.eventEmitter.emit(AUTH_EVENTS.USER_REGISTERED, {
+        userId: user._id.toString(),
+        email: user.email,
+        fullName: `${user.firstName} ${user.lastName}`.trim(),
+        otpCode: otp,
+      });
 
       return {
         success: true,
@@ -146,11 +149,13 @@ export class AuthService {
           );
 
           if (updateRepo) {
-            // const verification_token = this.jwtTokenService.generateAccessToken({
-            //   email: updateRepo.email,
-            //   type: updateRepo.type,
-            //   expiry: updateRepo.emailConfirmationExpiryDate,
-            // });
+            this.eventEmitter.emit(AUTH_EVENTS.EMAIL_VERIFICATION_REQUESTED, {
+              userId: updateRepo._id.toString(),
+              email: updateRepo.email,
+              fullName: `${updateRepo.firstName} ${updateRepo.lastName}`.trim(),
+              otpCode: otp,
+            });
+
             return {
               success: true,
               message: 'Account unverified. OTP sent to your email.',
@@ -250,8 +255,12 @@ export class AuthService {
         },
       );
 
-      // TODO: Send OTP to email
-      // console.log(`[DEV] Password reset OTP for ${emailOrPhone}: ${otp}`);
+      this.eventEmitter.emit(AUTH_EVENTS.PASSWORD_RESET_REQUESTED, {
+        userId: user._id.toString(),
+        email: user.email,
+        fullName: `${user.firstName} ${user.lastName}`.trim(),
+        otpCode: otp,
+      });
 
       return {
         success: true,
@@ -263,18 +272,27 @@ export class AuthService {
 
   private async verifyGoogleIdToken(idToken: string) {
     try {
-      const clientId = this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_ID');
-      const client = new OAuth2Client({ clientId: clientId });
+      const webClientId = this.configService.getOrThrow('GOOGLE_OAUTH_CLIENT_ID');
+      const iosClientId = this.configService.get<string>('GOOGLE_IOS_CLIENT_ID');
+      const androidClientId = this.configService.get<string>('GOOGLE_ANDROID_CLIENT_ID');
+
+      // Accept tokens from any registered client ID — mobile SDKs issue tokens
+      // with the platform client ID as the audience, not the web client ID
+      const audience = [webClientId, iosClientId, androidClientId].filter(Boolean);
+
+      const client = new OAuth2Client({ clientId: webClientId });
       const ticket = await client.verifyIdToken({
         idToken,
-        audience: clientId,
+        audience,
       });
+
       const payload = ticket.getPayload();
       if (!payload?.email) {
         throw new BadRequestException('Google account has no email address');
       }
       return payload;
     } catch (error) {
+      console.log(error, '===error====');
       if (error instanceof BadRequestException) throw error;
       throw new UnauthorizedException('Invalid Google token. Please try again.');
     }
@@ -354,6 +372,12 @@ export class AuthService {
 
     const refresh_token = await this.generateRefreshToken(user, ipAddress);
     const access_token = await this.generateAccessTokens(user);
+
+    this.eventEmitter.emit(AUTH_EVENTS.USER_WELCOME, {
+      userId: user._id.toString(),
+      email: user.email,
+      fullName: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim(),
+    });
 
     return {
       success: true,
@@ -769,13 +793,12 @@ export class AuthService {
         },
       );
 
-      // TODO: Send OTP via SMS using notification service
-      // await this.notificationService.sendSms({
-      //   to: formattedPhone,
-      //   message: `Your BreadBoy verification code is: ${otp}. Valid for 10 minutes.`,
-      // });
-
-      // console.log(`[DEV] New OTP for ${body.email}: ${otp}`); // For development
+      this.eventEmitter.emit(AUTH_EVENTS.EMAIL_VERIFICATION_REQUESTED, {
+        userId: user._id.toString(),
+        email: user.email,
+        fullName: `${user.firstName} ${user.lastName}`.trim(),
+        otpCode: otp,
+      });
 
       return {
         success: true,
