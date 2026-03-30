@@ -3,16 +3,19 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { Interval } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Rider, RiderDocument, DeliveryRequest, DeliveryRequestDocument, PricingConfig, PricingConfigDocument } from '@libs/database';
+import {
+  Rider,
+  RiderDocument,
+  DeliveryRequest,
+  DeliveryRequestDocument,
+  PricingConfig,
+  PricingConfigDocument,
+} from '@libs/database';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
 import { NotificationService } from '@libs/common/modules/notification';
 import { NotificationRecipientType } from '@libs/database';
 import { DeliveryStatusEnum, DeliveryPaymentStatusEnum } from '@libs/common';
-import {
-  DeliveryMatchingRedisService,
-  REQUEST_TIMEOUT_SEC,
-  MAX_RIDERS,
-} from '@libs/common/modules/delivery-matching';
+import { DeliveryMatchingRedisService, REQUEST_TIMEOUT_SEC, MAX_RIDERS } from '@libs/common/modules/delivery-matching';
 
 /**
  * RiderMatchingService
@@ -41,8 +44,11 @@ export class RiderMatchingService implements OnModuleInit {
 
   /** Calculate rider payout after commission */
   private async computeRiderPayout(totalPrice: number): Promise<{ riderPayout: number; commissionRate: number }> {
-    const config = await this.pricingModel.findOne({ isActive: true }).select('riderCommissionPercentage minimumRiderPayout').lean();
-    const rate = config?.riderCommissionPercentage ?? 0.80;
+    const config = await this.pricingModel
+      .findOne({ isActive: true })
+      .select('riderCommissionPercentage minimumRiderPayout')
+      .lean();
+    const rate = config?.riderCommissionPercentage ?? 0.8;
     const min = config?.minimumRiderPayout ?? 100;
     const riderPayout = Math.max(Math.round(totalPrice * rate), min);
     return { riderPayout, commissionRate: rate };
@@ -123,13 +129,10 @@ export class RiderMatchingService implements OnModuleInit {
         createdAt: delivery.createdAt,
       };
 
-      await this.sendRequestToRider(riderList[0], requestPayload, pickupLocation, riderPayout);
+      await this.sendRequestToRider(riderList[0], requestPayload, pickupLocation, riderPayout, 1, riderList.length);
       this.logger.log(`Sent request to rider 1/${riderList.length} for delivery ${deliveryIdStr}`);
     } catch (error) {
-      this.logger.error(
-        `Rider matching failed for delivery ${deliveryIdStr}: ${error.message}`,
-        error.stack,
-      );
+      this.logger.error(`Rider matching failed for delivery ${deliveryIdStr}: ${error.message}`, error.stack);
     }
   }
 
@@ -150,11 +153,7 @@ export class RiderMatchingService implements OnModuleInit {
     if (!delivery) return;
 
     // Only for quick deliveries that are in PAYMENT_CONFIRMED and have no rider yet
-    if (
-      delivery.deliveryType === 'quick' &&
-      delivery.status === 'payment_confirmed' &&
-      !delivery.rider
-    ) {
+    if (delivery.deliveryType === 'quick' && delivery.status === 'payment_confirmed' && !delivery.rider) {
       this.logger.log(
         `Payment confirmed for quick delivery ${deliveryId} — updating to SEARCHING_RIDER and broadcasting`,
       );
@@ -165,11 +164,7 @@ export class RiderMatchingService implements OnModuleInit {
       });
 
       // Broadcast the status change to the customer
-      this.gateway.emitDeliveryStatusUpdate(
-        deliveryId.toString(),
-        'searching_rider',
-        { paymentStatus: 'paid' },
-      );
+      this.gateway.emitDeliveryStatusUpdate(deliveryId.toString(), 'searching_rider', { paymentStatus: 'paid' });
 
       // Now broadcast to nearby riders
       await this.handleQuickDeliveryCreated({
@@ -199,7 +194,9 @@ export class RiderMatchingService implements OnModuleInit {
         // Rider must have capacity
         $expr: { $lt: ['$currentDeliveryCount', '$maxConcurrentDeliveries'] },
       })
-      .select('firstName lastName fcmToken currentLatitude currentLongitude maxConcurrentDeliveries currentDeliveryCount')
+      .select(
+        'firstName lastName fcmToken currentLatitude currentLongitude maxConcurrentDeliveries currentDeliveryCount',
+      )
       .lean();
 
     // Filter by distance
@@ -225,21 +222,24 @@ export class RiderMatchingService implements OnModuleInit {
     const dLon = ((lon2 - lon1) * Math.PI) / 180;
     const a =
       Math.sin(dLat / 2) ** 2 +
-      Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) ** 2;
+      Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   }
 
-  /** Send delivery request to a single rider via WS and FCM */
+  /** Send delivery request to a single rider via WS and FCM, then notify the customer of progress */
   private async sendRequestToRider(
     rider: RiderDocument & { distanceKm: number },
     requestPayload: Record<string, any>,
     pickupLocation: { address?: string },
     riderPayout: number,
+    riderIndex: number,   // 1-based position in the queue
+    totalRiders: number,
   ): Promise<void> {
     const riderId = rider._id.toString();
+    const deliveryId = requestPayload.deliveryId as string;
+
+    // Notify the rider
     this.gateway.emitToUser(riderId, 'delivery:new_request', {
       ...requestPayload,
       distanceFromRider: rider.distanceKm,
@@ -250,16 +250,26 @@ export class RiderMatchingService implements OnModuleInit {
           recipientId: rider._id,
           recipientType: NotificationRecipientType.RIDER,
           title: 'New Delivery Request! 📦',
-          body: `Pickup at ${pickupLocation.address || 'nearby location'} — ${rider.distanceKm.toFixed(1)}km away. Earn ₦${riderPayout.toLocaleString()}`,
+          body: `Pickup at ${pickupLocation.address || 'nearby location'} — ${rider.distanceKm.toFixed(
+            1,
+          )}km away. Earn ₦${riderPayout.toLocaleString()}`,
           token: rider.fcmToken,
           data: {
             type: 'new_delivery_request',
-            deliveryId: requestPayload.deliveryId,
+            deliveryId,
             trackingNumber: requestPayload.trackingNumber,
           },
         })
         .catch((e) => this.logger.warn(`Failed to push-notify rider ${riderId}: ${e.message}`));
     }
+
+    // Notify the customer watching this delivery
+    this.gateway.emitMatchingUpdate(deliveryId, {
+      type: 'request_sent',
+      riderIndex,
+      totalRiders,
+      timeoutSecs: REQUEST_TIMEOUT_SEC,
+    });
   }
 
   /** Handle unpaid delivery when all riders exhausted: cancel and delete */
@@ -268,6 +278,10 @@ export class RiderMatchingService implements OnModuleInit {
     delivery: { customer?: any; trackingNumber?: string },
   ): Promise<void> {
     await this.matchingRedis.deleteMatchingState(deliveryIdStr);
+
+    // Notify customer before cancelling so the UI can react
+    this.gateway.emitMatchingUpdate(deliveryIdStr, { type: 'exhausted_cancelled' });
+
     await this.deliveryModel.findByIdAndUpdate(deliveryIdStr, {
       $set: {
         status: DeliveryStatusEnum.CANCELLED,
@@ -292,14 +306,28 @@ export class RiderMatchingService implements OnModuleInit {
         })
         .catch(() => {});
     }
-    await this.deliveryModel.findByIdAndDelete(deliveryIdStr);
+    await this.deliveryModel.findByIdAndDelete(new Types.ObjectId(deliveryIdStr));
     this.logger.log(`Cancelled and deleted unpaid delivery ${deliveryIdStr} (riders exhausted)`);
   }
 
   /** Advance to next rider and send request (called on reject or timeout) */
-  private async advanceToNextRiderAndNotify(deliveryIdStr: string): Promise<void> {
+  private async advanceToNextRiderAndNotify(
+    deliveryIdStr: string,
+    reason: 'rejected' | 'timeout' = 'rejected',
+  ): Promise<void> {
     const delivery = await this.deliveryModel.findById(deliveryIdStr).lean();
     if (!delivery || delivery.rider) return; // Already assigned
+
+    // Emit what just happened (rejection or timeout) before advancing
+    const prevState = await this.matchingRedis.getMatchingState(deliveryIdStr);
+    if (prevState) {
+      this.gateway.emitMatchingUpdate(deliveryIdStr, {
+        type: reason === 'timeout' ? 'request_timeout' : 'request_rejected',
+        riderIndex: prevState.riderIndex + 1, // 1-based
+        totalRiders: prevState.riderIds.length,
+      });
+    }
+
     const state = await this.matchingRedis.advanceToNextRider(deliveryIdStr);
     if (!state) {
       this.logger.log(`All riders exhausted for delivery ${deliveryIdStr}`);
@@ -307,6 +335,7 @@ export class RiderMatchingService implements OnModuleInit {
       if (isPaid) {
         // Paid: clear Redis so retry cron can re-init; do not cancel
         await this.matchingRedis.deleteMatchingState(deliveryIdStr);
+        this.gateway.emitMatchingUpdate(deliveryIdStr, { type: 'exhausted_retrying' });
       } else {
         // Unpaid: cancel and delete the request
         await this.handleUnpaidExhausted(deliveryIdStr, delivery);
@@ -339,7 +368,11 @@ export class RiderMatchingService implements OnModuleInit {
       createdAt: delivery.createdAt,
     };
     const riderWithDist = { ...rider, distanceKm } as unknown as RiderDocument & { distanceKm: number };
-    await this.sendRequestToRider(riderWithDist, requestPayload, delivery.pickupLocation, riderPayout);
+    await this.sendRequestToRider(
+      riderWithDist, requestPayload, delivery.pickupLocation, riderPayout,
+      state.riderIndex + 1,   // 1-based
+      state.riderIds.length,
+    );
     this.logger.log(`Advanced to rider ${state.riderIndex + 1}/${state.riderIds.length} for delivery ${deliveryIdStr}`);
   }
 
@@ -347,7 +380,7 @@ export class RiderMatchingService implements OnModuleInit {
     this.matchingRedis.onMatchingEvent(async (event) => {
       if (event.type === 'rider_rejected' && event.deliveryId && event.riderId && event.customerId) {
         await this.matchingRedis.setCooldown(event.riderId, event.customerId);
-        await this.advanceToNextRiderAndNotify(event.deliveryId);
+        await this.advanceToNextRiderAndNotify(event.deliveryId, 'rejected');
       }
       if (event.type === 'rider_accepted' && event.deliveryId) {
         await this.matchingRedis.deleteMatchingState(event.deliveryId);
@@ -365,7 +398,7 @@ export class RiderMatchingService implements OnModuleInit {
       if (!state || state.status !== 'active') continue;
       if (now - state.sentAt >= timeoutMs) {
         this.logger.log(`Rider timeout for delivery ${deliveryId}, advancing to next`);
-        await this.advanceToNextRiderAndNotify(deliveryId);
+        await this.advanceToNextRiderAndNotify(deliveryId, 'timeout');
       }
     }
   }

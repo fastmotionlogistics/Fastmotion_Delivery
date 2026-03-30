@@ -610,6 +610,22 @@ export class DeliveryGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.server.to(getRoomName.adminLive()).emit(WS_SERVER_EVENTS.ADMIN_RIDER_LOCATION, payload);
   }
 
+  /** Broadcast rider-matching progress to the customer watching this delivery */
+  emitMatchingUpdate(
+    deliveryId: string,
+    update: {
+      type: 'request_sent' | 'request_rejected' | 'request_timeout' | 'exhausted_cancelled' | 'exhausted_retrying';
+      riderIndex?: number;  // 1-based position (e.g. 2 of 5)
+      totalRiders?: number;
+      timeoutSecs?: number; // only for request_sent — starts the client countdown
+    },
+  ) {
+    const room = getRoomName.delivery(deliveryId);
+    const payload = { deliveryId, ...update };
+    this.server.to(room).emit(WS_SERVER_EVENTS.MATCHING_UPDATE, payload);
+    this.crossServiceBridge.publish(WS_SERVER_EVENTS.MATCHING_UPDATE, room, payload, this.serviceId);
+  }
+
   /** Broadcast ETA update */
   emitETAUpdate(deliveryId: string, eta: { minutes: number; distance?: number }) {
     const room = getRoomName.delivery(deliveryId);

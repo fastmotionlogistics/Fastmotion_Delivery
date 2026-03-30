@@ -260,4 +260,10 @@ export class DeliveryController {
     return await this.deliveryService.getActiveDelivery(user);
   }
 
+  @Post(':id/retry-matching')
+  @ApiOperation({ summary: 'Retry rider matching for a paid delivery with no riders available' })
+  async retryRiderMatching(@CurrentUser() user: User, @Param('id') id: string) {
+    return await this.deliveryService.retryRiderMatching(user, id);
+  }
+
 }

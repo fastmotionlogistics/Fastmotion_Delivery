@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { computeDeliveryPricing, GeoZoneService } from '@libs/common';
 import {
   PricingConfig,
   PricingConfigDocument,
@@ -46,6 +47,7 @@ export class PricingService {
     private readonly timePricingModel: Model<TimePricingDocument>,
     @InjectModel(AuditLog.name)
     private readonly auditLogModel: Model<AuditLogDocument>,
+    private readonly geoZoneService: GeoZoneService,
   ) {}
 
   // ═══════════════════════════════════════════════
@@ -503,22 +505,21 @@ export class PricingService {
       throw new BadRequestException('No active pricing configuration found. Please create one first.');
     }
 
-    // 2. Calculate distance (Haversine)
+    // 2. Distance via Haversine (admin preview — no client-provided distance)
     const pickupLat = parseFloat(body.pickupLatitude);
     const pickupLng = parseFloat(body.pickupLongitude);
     const dropoffLat = parseFloat(body.dropoffLatitude);
     const dropoffLng = parseFloat(body.dropoffLongitude);
 
-    const distance = this.calculateDistance(pickupLat, pickupLng, dropoffLat, dropoffLng);
-    const estimatedDuration = Math.ceil((distance / 30) * 60); // ~30 km/h average
+    const distance = this.geoZoneService.haversineDistance(pickupLat, pickupLng, dropoffLat, dropoffLng);
+    const duration = Math.ceil((distance / 30) * 60); // ~30 km/h average
 
-    // 3. Determine zones
-    const pickupZone = await this.findZoneByCoords(pickupLat, pickupLng);
-    const dropoffZone = await this.findZoneByCoords(dropoffLat, dropoffLng);
-    const isInterZone = pickupZone && dropoffZone &&
-      pickupZone._id.toString() !== dropoffZone._id.toString();
+    // 3. Resolve zones & time pricing
+    const [pickupZone, dropoffZone] = await Promise.all([
+      this.geoZoneService.findZoneByCoordinates(pickupLat, pickupLng),
+      this.geoZoneService.findZoneByCoordinates(dropoffLat, dropoffLng),
+    ]);
 
-    // 4. Get time pricing
     const scheduledDate = body.scheduledTime ? new Date(body.scheduledTime) : new Date();
     const dayOfWeek = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][scheduledDate.getDay()];
     const timeString = `${scheduledDate.getHours().toString().padStart(2, '0')}:${scheduledDate.getMinutes().toString().padStart(2, '0')}`;
@@ -533,118 +534,109 @@ export class PricingService {
       .sort({ priority: -1 })
       .lean();
 
-    // 5. Calculate multipliers (weight removed — only size & category)
-    const zoneMultiplier = pickupZone?.priceMultiplier || 1.0;
-    const timeMultiplier = timePricing?.priceMultiplier || 1.0;
-    const deliveryTypeMultiplier = body.deliveryType === 'quick'
-      ? config.quickDeliveryMultiplier || 1.0
-      : config.scheduledDeliveryMultiplier || 1.0;
-    const interZoneMultiplier = isInterZone ? config.interZoneMultiplier || 1.0 : 1.0;
-
-    // Size-based pricing
-    const parcelSize = body.size || 'medium';
-    const sizeFee = config.sizeFees?.[parcelSize] || 0;
-
-    // Category-based pricing
+    // 4. Category multiplier from config (admin preview has no category DB docs)
     const parcelCategory = body.category || 'other';
     const categoryMultiplier = config.categoryMultipliers?.[parcelCategory] || 1.0;
 
-    // 6. Calculate prices
-    const basePrice = config.baseDeliveryFee;
-    const distancePrice = Math.round(distance * config.pricePerKm);
-    const timePrice = timePricing?.additionalFee || 0;
+    // 5. Compute via shared helper
+    const result = computeDeliveryPricing({
+      distance,
+      duration,
+      config,
+      pickupZone,
+      dropoffZone,
+      timePricing,
+      deliveryType: body.deliveryType,
+      parcelSize: body.size || 'medium',
+      categoryMultiplier,
+    });
 
-    let subtotal = basePrice + distancePrice + timePrice + sizeFee;
-    subtotal = Math.round(
-      subtotal * categoryMultiplier *
-      zoneMultiplier * timeMultiplier *
-      deliveryTypeMultiplier * interZoneMultiplier,
-    );
-
-    subtotal = Math.max(subtotal, config.minimumDeliveryFee);
-    if (config.maximumDeliveryFee) {
-      subtotal = Math.min(subtotal, config.maximumDeliveryFee);
-    }
-
-    // Service fee
-    let serviceFee = Math.round(subtotal * (config.serviceFeePercentage || 0));
-    serviceFee = Math.max(serviceFee, config.minimumServiceFee || 0);
-    if (config.maximumServiceFee) {
-      serviceFee = Math.min(serviceFee, config.maximumServiceFee);
-    }
-
-    const fctDevelopmentLevy = config.fctDevelopmentLevy || 0;
-    const totalPrice = subtotal + serviceFee + fctDevelopmentLevy;
-
+    // 6. Map to admin response shape (preserves frontend compatibility)
     return {
       success: true,
       message: 'Price calculated',
       data: {
         breakdown: {
-          basePrice,
-          distancePrice,
-          sizeFee,
-          timePrice,
-          serviceFee,
-          fctDevelopmentLevy,
-          subtotal,
-          totalPrice,
-          currency: config.currency,
-          currencySymbol: config.currencySymbol,
+          basePrice: result.breakdown.basePrice,
+          distancePrice: result.breakdown.distancePrice,
+          sizeFee: result.breakdown.sizeFee,
+          timePrice: result.breakdown.timePrice,
+          serviceFee: result.breakdown.serviceFee,
+          fctDevelopmentLevy: result.breakdown.fctDevelopmentLevy,
+          subtotal: result.breakdown.subtotal,
+          totalPrice: result.breakdown.totalPrice,
+          currency: result.breakdown.currency,
+          currencySymbol: result.breakdown.currencySymbol,
         },
         multipliers: {
-          zone: zoneMultiplier,
-          category: categoryMultiplier,
-          time: timeMultiplier,
-          deliveryType: deliveryTypeMultiplier,
-          interZone: interZoneMultiplier,
+          zone: result.breakdown.zoneMultiplier,
+          category: result.breakdown.categoryMultiplier,
+          time: result.breakdown.timeMultiplier,
+          deliveryType: result.breakdown.deliveryTypeMultiplier,
+          interZone: result.breakdown.interZoneMultiplier,
         },
         zones: {
-          pickup: pickupZone ? { id: pickupZone._id, name: pickupZone.name, code: pickupZone.code } : null,
-          dropoff: dropoffZone ? { id: dropoffZone._id, name: dropoffZone.name, code: dropoffZone.code } : null,
-          isInterZone,
+          pickup: result.pickupZone
+            ? { id: result.pickupZone._id, name: result.pickupZone.name, code: result.pickupZone.code }
+            : null,
+          dropoff: result.dropoffZone
+            ? { id: result.dropoffZone._id, name: result.dropoffZone.name, code: result.dropoffZone.code }
+            : null,
+          isInterZone: result.isInterZone,
         },
-        timeSlot: timePricing ? { id: timePricing._id, name: timePricing.name, isPeak: timePricing.isPeakPeriod } : null,
-        estimatedDistance: Math.round(distance * 100) / 100,
-        estimatedDuration,
+        timeSlot: result.timePricing
+          ? { id: result.timePricing._id, name: result.timePricing.name, isPeak: result.timePricing.isPeakPeriod }
+          : null,
+        estimatedDistance: result.estimatedDistance,
+        estimatedDuration: result.estimatedDuration,
       },
     };
   }
 
   // ═══════════════════════════════════════════════
-  //  PRIVATE HELPERS
+  //  LOCATION RESOLVER  (used by admin web calculator)
   // ═══════════════════════════════════════════════
 
-  private async findZoneByCoords(lat: number, lng: number): Promise<LocationZone | null> {
-    const zones = await this.zoneModel
-      .find({ status: ZoneStatusEnum.ACTIVE })
-      .sort({ priority: -1 })
-      .lean();
+  async resolveLocations(body: {
+    pickupLat: number;
+    pickupLng: number;
+    dropoffLat: number;
+    dropoffLng: number;
+  }) {
+    const { pickupLat, pickupLng, dropoffLat, dropoffLng } = body;
 
-    for (const zone of zones) {
-      if (zone.centerPoint && zone.radiusKm) {
-        const dist = this.calculateDistance(
-          lat, lng,
-          zone.centerPoint.latitude,
-          zone.centerPoint.longitude,
-        );
-        if (dist <= zone.radiusKm) return zone;
-      }
-    }
-    return null;
-  }
+    const [pickupZone, dropoffZone] = await Promise.all([
+      this.geoZoneService.findZoneByCoordinates(pickupLat, pickupLng),
+      this.geoZoneService.findZoneByCoordinates(dropoffLat, dropoffLng),
+    ]);
 
-  private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-    const R = 6371;
-    const dLat = ((lat2 - lat1) * Math.PI) / 180;
-    const dLon = ((lon2 - lon1) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+    const distance = this.geoZoneService.haversineDistance(pickupLat, pickupLng, dropoffLat, dropoffLng);
+    const duration = Math.ceil((distance / 30) * 60);
+    const isInterZone =
+      pickupZone != null &&
+      dropoffZone != null &&
+      pickupZone._id.toString() !== dropoffZone._id.toString();
+
+    const toZoneDto = (z: LocationZone | null) =>
+      z
+        ? {
+            id: z._id,
+            name: z.name,
+            code: z.code,
+            priceMultiplier: z.priceMultiplier,
+            surgePct: Math.round((z.priceMultiplier - 1) * 100),
+          }
+        : null;
+
+    return {
+      success: true,
+      data: {
+        pickup: { zone: toZoneDto(pickupZone) },
+        dropoff: { zone: toZoneDto(dropoffZone) },
+        distance: Math.round(distance * 10) / 10,
+        duration,
+        isInterZone,
+      },
+    };
   }
 }

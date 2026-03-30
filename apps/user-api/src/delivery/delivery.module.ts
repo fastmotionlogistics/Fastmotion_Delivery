@@ -33,6 +33,7 @@ import {
 import { GatewayModule } from '@libs/common/modules/gateway';
 import { NotificationModule } from '@libs/common/modules/notification';
 import { DeliveryMatchingModule } from '@libs/common/modules/delivery-matching';
+import { PendingDeliveryModule } from '@libs/common/modules/pending-delivery';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { DeliveryMatchingModule } from '@libs/common/modules/delivery-matching';
     GatewayModule,
     NotificationModule,
     DeliveryMatchingModule,
+    PendingDeliveryModule,
   ],
   controllers: [DeliveryController],
   providers: [DeliveryService, DeliveryRepository, RiderMatchingService],

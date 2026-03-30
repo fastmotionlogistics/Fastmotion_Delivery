@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PricingController } from './pricing.controller';
 import { PricingService } from './pricing.service';
+import { GeoZoneModule } from '@libs/common';
 import {
   DatabaseModule,
   PricingConfig,
@@ -17,6 +18,7 @@ import {
 
 @Module({
   imports: [
+    GeoZoneModule,
     DatabaseModule.forFeature([
       { name: PricingConfig.name, schema: PricingConfigSchema },
       { name: LocationZone.name, schema: LocationZoneSchema },

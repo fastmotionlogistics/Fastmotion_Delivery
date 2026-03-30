@@ -225,6 +225,17 @@ export class PricingController {
     });
   }
 
+  // ============ Location Resolver ============
+
+  @ApiOperation({ summary: 'Resolve zones and distance from coordinates (admin calculator)' })
+  @RequirePermissions(AdminPermissionEnum.PRICING_VIEW)
+  @Post('resolve-locations')
+  async resolveLocations(
+    @Body() body: { pickupLat: number; pickupLng: number; dropoffLat: number; dropoffLng: number },
+  ) {
+    return await this.pricingService.resolveLocations(body);
+  }
+
   // ============ Price Calculator ============
 
   @ApiOperation({ summary: 'Calculate delivery price (preview for admin)' })

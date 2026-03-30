@@ -46,6 +46,9 @@ export const WS_SERVER_EVENTS = {
   // Rider-specific
   NEW_DELIVERY_REQUEST: 'delivery:new_request',
 
+  // Matching progress updates (customer watching searching phase)
+  MATCHING_UPDATE: 'delivery:matching_update',
+
   // Admin live dispatch
   ADMIN_ACTIVE_DELIVERIES: 'admin:active_deliveries',
   ADMIN_DELIVERY_UPDATE: 'admin:delivery_update',

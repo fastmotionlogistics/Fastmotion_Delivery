@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, ForbiddenException 
 import { Types } from 'mongoose';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { User } from '@libs/database';
-import { DeliveryStatusEnum, DeliveryTypeEnum, DeliveryPaymentStatusEnum } from '@libs/common';
+import { DeliveryStatusEnum, DeliveryTypeEnum, DeliveryPaymentStatusEnum, computeDeliveryPricing } from '@libs/common';
 import { DeliveryRepository } from './repository';
 import {
   CreateDeliveryRequestDto,
@@ -15,6 +15,7 @@ import {
 import { DeliveryGateway } from '@libs/common/modules/gateway';
 import { NotificationService } from '@libs/common/modules/notification';
 import { NotificationRecipientType } from '@libs/database';
+import { PendingDeliveryRedisService } from '@libs/common/modules/pending-delivery';
 
 @Injectable()
 export class DeliveryService {
@@ -23,6 +24,7 @@ export class DeliveryService {
     private readonly eventEmitter: EventEmitter2,
     private readonly gateway: DeliveryGateway,
     private readonly notificationService: NotificationService,
+    private readonly pendingDeliveryRedis: PendingDeliveryRedisService,
   ) {}
 
   // Helper: push notify the delivery's rider
@@ -62,6 +64,60 @@ export class DeliveryService {
       throw new BadRequestException('Scheduled pickup time is required for scheduled deliveries');
     }
 
+    // Quick + card/bank (pay_now): cache in Redis instead of creating in DB.
+    // No DB record is created until the Monnify webhook confirms payment.
+    // This prevents orphaned deliveries stuck at pending_payment forever.
+    const isCardOrBank =
+      body.paymentMethod === 'card' ||
+      body.paymentMethod === 'bank_transfer' ||
+      (!body.paymentMethod && !body.paymentReference && body.deliveryType === DeliveryTypeEnum.QUICK);
+
+    if (isQuickDelivery && isCardOrBank && !body.paymentReference) {
+      const pendingId = new Types.ObjectId();
+
+      await this.pendingDeliveryRedis.cache(pendingId.toString(), {
+        userId: user._id.toString(),
+        deliveryType: body.deliveryType,
+        paymentMethod: body.paymentMethod || 'card',
+        pickupLocation: body.pickupLocation,
+        dropoffLocation: body.dropoffLocation,
+        parcelDetails: {
+          description: body?.parcelDetails?.description ?? '',
+          size: body.parcelDetails.size,
+          weight: body.parcelDetails.weight,
+          quantity: body.parcelDetails.quantity || 1,
+          isFragile: body.parcelDetails.isFragile || false,
+          category: body.parcelDetails.category,
+          declaredValue: body.parcelDetails.declaredValue,
+          specialHandling: body.parcelDetails.specialHandling || [],
+        },
+        pricing: pricing.breakdown,
+        trackingNumber,
+        estimatedDistance: pricing.estimatedDistance,
+        estimatedDuration: pricing.estimatedDuration,
+        pickupZoneId: pricing.pickupZone?._id?.toString(),
+        dropoffZoneId: pricing.dropoffZone?._id?.toString(),
+        isInterZoneDelivery: pricing.isInterZone,
+        timePricingAppliedId: pricing.timePricing?._id?.toString(),
+      });
+
+      return {
+        success: true,
+        message: 'Delivery request created. Complete payment to confirm.',
+        data: {
+          id: pendingId,
+          trackingNumber,
+          status: DeliveryStatusEnum.PENDING,
+          deliveryType: body.deliveryType,
+          estimatedPrice: pricing.breakdown.totalPrice,
+          estimatedDistance: pricing.estimatedDistance,
+          estimatedDuration: pricing.estimatedDuration,
+          paymentRequiredAtPickup: false,
+          isPendingPayment: true,
+        },
+      };
+    }
+
     // PRD 7.2: Scheduled deliveries require upfront payment reference
     // Quick deliveries:
     //   - paymentMethod === 'wallet' and paymentReference provided → paid upfront → SEARCHING_RIDER
@@ -81,7 +137,7 @@ export class DeliveryService {
       initialStatus = DeliveryStatusEnum.PENDING;
     }
 
-    // Create delivery request
+    // Create delivery request in DB
     const delivery = await this.deliveryRepository.create({
       trackingNumber,
       customer: user._id,
@@ -105,7 +161,7 @@ export class DeliveryService {
       paymentStatus:
         isQuickDelivery || !body.paymentReference ? DeliveryPaymentStatusEnum.PENDING : DeliveryPaymentStatusEnum.PAID,
       scheduledPickupTime: body.scheduledPickupTime ? new Date(body.scheduledPickupTime) : undefined,
-      paymentRequiredAtPickup: isQuickDelivery,
+      paymentRequiredAtPickup: body.paymentMethod === 'pay_at_pickup',
       canReschedule: true,
       pickupZone: pricing.pickupZone?._id,
       dropoffZone: pricing.dropoffZone?._id,
@@ -163,7 +219,7 @@ export class DeliveryService {
         estimatedPrice: pricing.breakdown.totalPrice,
         estimatedDistance: pricing.estimatedDistance,
         estimatedDuration: pricing.estimatedDuration,
-        paymentRequiredAtPickup: isQuickDelivery,
+        paymentRequiredAtPickup: body.paymentMethod === 'pay_at_pickup',
         scheduledPickupTime: delivery.scheduledPickupTime,
       },
     };
@@ -552,9 +608,19 @@ export class DeliveryService {
   }
 
   async cancelDelivery(user: User, id: string, body: CancelDeliveryDto) {
-    const delivery = await this.deliveryRepository.findById(id);
+    let delivery = await this.deliveryRepository.findById(id);
 
+    // Delivery may be a Redis-pending request (quick + card/bank, not yet in DB)
     if (!delivery) {
+      const pending = await this.pendingDeliveryRedis.get(id);
+      if (pending && pending.userId === user._id.toString()) {
+        await this.pendingDeliveryRedis.delete(id);
+        return {
+          success: true,
+          message: 'Delivery request cancelled',
+          data: { id, status: 'cancelled' },
+        };
+      }
       throw new NotFoundException('Delivery not found');
     }
 
@@ -1126,163 +1192,81 @@ export class DeliveryService {
     // Always use client-provided Google Maps distance/duration for consistency.
     // The client MUST send these values (fetched from Google Directions API).
     // Only fall back to Haversine as a last resort (will differ from Google route distance).
-    let distance: number;
-    let duration: number;
+    const distance =
+      body.estimatedDistance && body.estimatedDistance > 0
+        ? body.estimatedDistance
+        : this.deliveryRepository.calculateDistance(
+            parseFloat(body.pickupLocation.latitude),
+            parseFloat(body.pickupLocation.longitude),
+            parseFloat(body.dropoffLocation.latitude),
+            parseFloat(body.dropoffLocation.longitude),
+          );
 
-    if (body.estimatedDistance && body.estimatedDistance > 0) {
-      distance = body.estimatedDistance;
-    } else {
-      // Fallback: Haversine straight-line distance (less accurate than road distance)
-      distance = this.deliveryRepository.calculateDistance(
+    const duration =
+      body.estimatedDuration && body.estimatedDuration > 0
+        ? body.estimatedDuration
+        : this.deliveryRepository.estimateDuration(distance);
+
+    // Resolve zones, time pricing, category, handling, coupon from DB
+    const [pickupZone, dropoffZone] = await Promise.all([
+      this.deliveryRepository.findZoneByCoordinates(
         parseFloat(body.pickupLocation.latitude),
         parseFloat(body.pickupLocation.longitude),
+      ),
+      this.deliveryRepository.findZoneByCoordinates(
         parseFloat(body.dropoffLocation.latitude),
         parseFloat(body.dropoffLocation.longitude),
-      );
-    }
+      ),
+    ]);
 
-    if (body.estimatedDuration && body.estimatedDuration > 0) {
-      duration = body.estimatedDuration;
-    } else {
-      duration = this.deliveryRepository.estimateDuration(distance);
-    }
-
-    // Get zones
-    const pickupZone = await this.deliveryRepository.findZoneByCoordinates(
-      parseFloat(body.pickupLocation.latitude),
-      parseFloat(body.pickupLocation.longitude),
-    );
-
-    const dropoffZone = await this.deliveryRepository.findZoneByCoordinates(
-      parseFloat(body.dropoffLocation.latitude),
-      parseFloat(body.dropoffLocation.longitude),
-    );
-
-    const isInterZone = pickupZone && dropoffZone && pickupZone._id.toString() !== dropoffZone._id.toString();
-
-    // Get time pricing
     const scheduledTime = body.scheduledPickupTime ? new Date(body.scheduledPickupTime) : new Date();
     const timePricing = await this.deliveryRepository.findTimePricing(scheduledTime);
 
-    // Get category from DB
     const parcelCategory = body.parcelDetails.category || 'other';
     const categoryDoc = await this.deliveryRepository.findCategoryBySlug(parcelCategory);
     const categoryMultiplier = categoryDoc?.priceMultiplier || config.categoryMultipliers?.[parcelCategory] || 1.0;
     const categoryAdditionalFee = categoryDoc?.additionalFee || 0;
 
-    // Get special handling from DB
     const handlingSlugs: string[] = body.parcelDetails.specialHandling || [];
     const handlingDocs = await this.deliveryRepository.findHandlingBySlugs(handlingSlugs);
     const handlingTotalFee = handlingDocs.reduce((sum, h) => sum + (h.additionalFee || 0), 0);
 
-    // Calculate multipliers
-    const zoneMultiplier = pickupZone?.priceMultiplier || 1.0;
-    const timeMultiplier = timePricing?.priceMultiplier || 1.0;
-    const deliveryTypeMultiplier =
-      body.deliveryType === DeliveryTypeEnum.QUICK
-        ? config.quickDeliveryMultiplier || 1.0
-        : config.scheduledDeliveryMultiplier || 1.0;
-    const interZoneMultiplier = isInterZone ? config.interZoneMultiplier || 1.0 : 1.0;
+    const coupon = body.couponCode ? await this.deliveryRepository.findCouponByCode(body.couponCode) : null;
 
-    // Size-based pricing from config
-    const parcelSize = body.parcelDetails.size || 'medium';
-    const sizeFee = config.sizeFees?.[parcelSize] || 0;
-    // const sizeMultiplier = config.sizeMultipliers?.[parcelSize] || 1.0;
-
-    // Calculate base prices
-    const basePrice = config.baseDeliveryFee;
-    const distancePrice = Math.round(distance * config.pricePerKm);
-    const timePrice = timePricing?.additionalFee || 0;
-
-    // Calculate subtotal with all multipliers (size, category, zone, time, deliveryType, interZone)
-    // Weight removed — only size matters
-    let subtotal = basePrice + distancePrice + timePrice + sizeFee + categoryAdditionalFee + handlingTotalFee;
-    subtotal = Math.round(
-      subtotal * categoryMultiplier * zoneMultiplier * timeMultiplier * deliveryTypeMultiplier * interZoneMultiplier,
-    );
-
-    // Apply minimum
-    subtotal = Math.max(subtotal, config.minimumDeliveryFee);
-
-    // Apply maximum if set
-    if (config.maximumDeliveryFee) {
-      subtotal = Math.min(subtotal, config.maximumDeliveryFee);
-    }
-
-    if (config.fctDevelopmentLevy > 0) {
-      subtotal = subtotal + config.fctDevelopmentLevy;
-    }
-    // Calculate service fee
-    let serviceFee = Math.round(subtotal * (config.serviceFeePercentage || 0));
-    serviceFee = Math.max(serviceFee, config.minimumServiceFee || 0);
-    if (config.maximumServiceFee) {
-      serviceFee = Math.min(serviceFee, config.maximumServiceFee);
-    }
-
-    // Apply coupon if provided
-    let discountAmount = 0;
-    let coupon = null;
-
-    if (body.couponCode) {
-      coupon = await this.deliveryRepository.findCouponByCode(body.couponCode);
-      if (coupon) {
-        if (coupon.discountType === 'percentage') {
-          discountAmount = Math.round(subtotal * (coupon.discountValue / 100));
-          if (coupon.maxDiscountAmount) {
-            discountAmount = Math.min(discountAmount, coupon.maxDiscountAmount);
-          }
-        } else {
-          discountAmount = coupon.discountValue;
-        }
-        discountAmount = Math.min(discountAmount, subtotal); // Can't discount more than subtotal
-      }
-    }
-
-    const totalPrice = subtotal + serviceFee - discountAmount;
-
-    // Rider earnings = rider commission percentage of totalPrice (matching delivery-api computeRiderPayout)
-    const riderCommission = config.riderCommissionPercentage || 0.8;
-    const riderEarnings = Math.round(totalPrice * riderCommission);
-    const minimumPayout = config.minimumRiderPayout || 100;
-    const finalRiderEarnings = Math.max(riderEarnings, minimumPayout);
-
-    return {
-      estimatedDistance: Math.round(distance * 100) / 100,
-      estimatedDuration: duration,
+    return computeDeliveryPricing({
+      distance,
+      duration,
+      config,
       pickupZone,
       dropoffZone,
-      isInterZone,
       timePricing,
+      deliveryType: body.deliveryType,
+      parcelSize: body.parcelDetails.size || 'medium',
+      categoryMultiplier,
+      categoryAdditionalFee,
+      handlingTotalFee,
       coupon,
-      breakdown: {
-        basePrice,
-        distancePrice,
-        weightPrice: 0,
-        sizeFee,
-        categoryAdditionalFee,
-        handlingFee: handlingTotalFee,
-        fctDevelopmentLevy: config.fctDevelopmentLevy,
-        // sizeMultiplierPrice: sizeMultiplier > 1 ? Math.round(subtotal - subtotal / sizeMultiplier) : 0,
-        categoryMultiplierPrice: categoryMultiplier > 1 ? Math.round(subtotal - subtotal / categoryMultiplier) : 0,
-        timeMultiplierPrice: Math.round(subtotal * (timeMultiplier - 1)),
-        zoneMultiplierPrice: Math.round(subtotal * (zoneMultiplier - 1)),
-        surgePrice: 0,
-        serviceFee,
-        discountAmount,
-        couponApplied: coupon?._id,
-        couponCode: coupon?.code,
-        subtotal,
-        totalPrice,
-        currency: config.currency,
-        zoneMultiplier,
-        weightMultiplier: 1.0,
-        timeMultiplier,
-        // sizeMultiplier,
-        categoryMultiplier,
-        deliveryTypeMultiplier,
-        riderEarnings: finalRiderEarnings,
-      },
-    };
+    });
+  }
+
+  async retryRiderMatching(user: User, id: string) {
+    const delivery = await this.deliveryRepository.findById(id);
+    if (!delivery) throw new NotFoundException('Delivery not found');
+    if (delivery.customer.toString() !== user._id.toString()) throw new ForbiddenException('Access denied');
+
+    if (delivery.paymentStatus !== DeliveryPaymentStatusEnum.PAID) {
+      throw new BadRequestException('Only paid deliveries can retry rider matching');
+    }
+    if (delivery.status !== DeliveryStatusEnum.SEARCHING_RIDER) {
+      throw new BadRequestException('Delivery is not in searching state');
+    }
+
+    this.eventEmitter.emit('delivery.created.quick', {
+      deliveryId: delivery._id,
+      pickupLocation: delivery.pickupLocation,
+    });
+
+    return { success: true, message: 'Rider matching restarted' };
   }
 
   // ============ Catalog (Categories & Handling) ============
@@ -1293,6 +1277,7 @@ export class DeliveryService {
   // }
 
   // async getHandling() {
+
   //   const data = await this.deliveryRepository.findActiveHandling();
   //   return { success: true, message: 'Special handling options retrieved', data };
   // }

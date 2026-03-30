@@ -20,6 +20,7 @@ import { InitiatePaymentDto, FundWalletDto, VerifyPaymentDto, WithdrawDto } from
 import { TransactionCategory } from '@libs/database/schemas/walletTransaction.schema';
 import { MonnifyService } from '@libs/common/modules/monnify';
 import { DeliveryGateway } from '@libs/common/modules/gateway';
+import { PendingDeliveryRedisService } from '@libs/common/modules/pending-delivery';
 
 @Injectable()
 export class PaymentService {
@@ -30,16 +31,45 @@ export class PaymentService {
     private readonly eventEmitter: EventEmitter2,
     private readonly monnifyService: MonnifyService,
     private readonly gateway: DeliveryGateway,
+    private readonly pendingDeliveryRedis: PendingDeliveryRedisService,
   ) {}
 
   async initiatePayment(user: User, body: InitiatePaymentDto) {
     const userId = new Types.ObjectId(user._id);
     const deliveryId = new Types.ObjectId(body.deliveryRequestId);
 
-    // Get delivery request
-    const delivery = await this.paymentRepository.findDeliveryById(deliveryId);
+    // Try to find delivery in DB first
+    let delivery = await this.paymentRepository.findDeliveryById(deliveryId);
+
+    // Not in DB — check Redis (quick + card/bank pending payment)
     if (!delivery) {
-      throw new NotFoundException('Delivery request not found');
+      const pending = await this.pendingDeliveryRedis.get(deliveryId.toString());
+      if (!pending) {
+        throw new NotFoundException('Delivery request not found');
+      }
+
+      // Verify ownership
+      if (pending.userId !== userId.toString()) {
+        throw new ForbiddenException('You do not have access to this delivery');
+      }
+
+      // Check if payment already exists for this pending delivery
+      const existingPayment = await this.paymentRepository.findPaymentByDelivery(deliveryId);
+      if (existingPayment && existingPayment.status === DeliveryPaymentStatusEnum.PAID) {
+        throw new BadRequestException('Payment has already been completed for this delivery');
+      }
+
+      const amount = pending.pricing?.totalPrice;
+      if (!amount || amount <= 0) {
+        throw new BadRequestException('Invalid payment amount');
+      }
+
+      // Wallet is not supported for Redis-pending deliveries (delivery doesn't exist in DB yet)
+      if (body.paymentMethod === DeliveryPaymentMethodEnum.WALLET) {
+        throw new BadRequestException('Wallet payment is not available for this order. Please use card or bank transfer.');
+      }
+
+      return this.initiateMonnifyPaymentFromPending(user, deliveryId, pending.trackingNumber, amount, body.paymentMethod);
     }
 
     // Verify ownership
@@ -241,6 +271,76 @@ export class PaymentService {
     return {
       success: true,
       message: 'Payment initiated. Complete payment to proceed.',
+      data: {
+        payment: {
+          id: payment._id,
+          reference: payment.reference,
+          amount: payment.amount,
+          status: payment.status,
+          method: payment.paymentMethod,
+        },
+        checkoutUrl: monnifyResult.responseBody?.checkoutUrl,
+        transactionReference: monnifyResult.responseBody?.transactionReference,
+        provider: 'monnify',
+      },
+    };
+  }
+
+  // Monnify payment for a Redis-pending delivery (not yet in DB)
+  private async initiateMonnifyPaymentFromPending(
+    user: User,
+    deliveryId: Types.ObjectId,
+    trackingNumber: string,
+    amount: number,
+    paymentMethod: DeliveryPaymentMethodEnum,
+  ) {
+    const userId = new Types.ObjectId(user._id);
+    const paymentReference = this.paymentRepository.generatePaymentReference();
+
+    // Create pending payment record — deliveryRequest points to the pre-generated ID
+    // that will be used as _id when the delivery is created from Redis after payment.
+    const payment = await this.paymentRepository.createPayment({
+      reference: paymentReference,
+      user: userId,
+      deliveryRequest: deliveryId,
+      amount,
+      currency: 'NGN',
+      paymentMethod,
+      status: DeliveryPaymentStatusEnum.PENDING,
+      provider: 'monnify',
+      description: `Payment for delivery ${trackingNumber}`,
+      metadata: { pendingRedisDelivery: true, trackingNumber },
+    });
+
+    const monnifyMethods =
+      paymentMethod === DeliveryPaymentMethodEnum.CARD
+        ? ['CARD']
+        : paymentMethod === DeliveryPaymentMethodEnum.BANK_TRANSFER
+          ? ['ACCOUNT_TRANSFER']
+          : ['CARD', 'ACCOUNT_TRANSFER'];
+
+    const monnifyResult = await this.monnifyService.initializePayment({
+      amount,
+      customerName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Customer',
+      customerEmail: user.email,
+      paymentReference,
+      paymentDescription: `FastMotion delivery ${trackingNumber}`,
+      paymentMethods: monnifyMethods,
+      metaData: {
+        deliveryId: deliveryId.toString(),
+        userId: userId.toString(),
+        trackingNumber,
+        pendingRedisDelivery: 'true',
+      },
+    });
+
+    await this.paymentRepository.updatePaymentByReference(paymentReference, {
+      providerReference: monnifyResult.responseBody?.transactionReference,
+    });
+
+    return {
+      success: true,
+      message: 'Payment initiated. Complete payment to confirm your delivery.',
       data: {
         payment: {
           id: payment._id,
@@ -818,16 +918,53 @@ export class PaymentService {
     // If this is a delivery payment, update delivery status and generate PINs
     if (payment.deliveryRequest) {
       const deliveryId = payment.deliveryRequest as Types.ObjectId;
-      const delivery = await this.paymentRepository.findDeliveryById(deliveryId);
+      let delivery = await this.paymentRepository.findDeliveryById(deliveryId);
+
+      // Delivery not in DB — it was a Redis-pending delivery (quick + card/bank).
+      // Create it in the DB now using the cached data.
+      if (!delivery) {
+        const pending = await this.pendingDeliveryRedis.get(deliveryId.toString());
+        if (pending) {
+          delivery = await this.paymentRepository.deliveryModel.create({
+            _id: deliveryId,
+            trackingNumber: pending.trackingNumber,
+            customer: new Types.ObjectId(pending.userId),
+            deliveryType: pending.deliveryType,
+            status: DeliveryStatusEnum.PAYMENT_CONFIRMED,
+            pickupLocation: pending.pickupLocation,
+            dropoffLocation: pending.dropoffLocation,
+            parcelDetails: pending.parcelDetails,
+            estimatedDistance: pending.estimatedDistance,
+            estimatedDuration: pending.estimatedDuration,
+            pricing: pending.pricing,
+            paymentStatus: DeliveryPaymentStatusEnum.PAID,
+            paymentRequiredAtPickup: false,
+            canReschedule: false,
+            pickupZone: pending.pickupZoneId ? new Types.ObjectId(pending.pickupZoneId) : undefined,
+            dropoffZone: pending.dropoffZoneId ? new Types.ObjectId(pending.dropoffZoneId) : undefined,
+            isInterZoneDelivery: pending.isInterZoneDelivery,
+            timePricingApplied: pending.timePricingAppliedId
+              ? new Types.ObjectId(pending.timePricingAppliedId)
+              : undefined,
+          });
+          await this.pendingDeliveryRedis.delete(deliveryId.toString());
+          this.logger.log(`Created delivery ${deliveryId} from Redis cache — payment confirmed`);
+        } else {
+          this.logger.warn(
+            `Delivery ${deliveryId} not found in DB or Redis — cannot process payment webhook`,
+          );
+          return;
+        }
+      }
 
       const pickupPin = Math.floor(1000 + Math.random() * 9000).toString();
       const deliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
 
-      // Determine next status based on delivery type and current status
-      let newStatus = DeliveryStatusEnum.PAYMENT_CONFIRMED;
-      if (delivery?.deliveryType === 'scheduled') {
-        newStatus = DeliveryStatusEnum.SCHEDULED;
-      }
+      // Determine next status based on delivery type
+      const newStatus =
+        delivery.deliveryType === 'scheduled'
+          ? DeliveryStatusEnum.SCHEDULED
+          : DeliveryStatusEnum.PAYMENT_CONFIRMED;
 
       await this.paymentRepository.deliveryModel.findByIdAndUpdate(deliveryId, {
         $set: {
