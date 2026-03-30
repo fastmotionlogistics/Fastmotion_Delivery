@@ -7,7 +7,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
-import { Rider, RiderDocument, Admin } from '@libs/database';
+import { Rider, RiderDocument, Admin, DeliveryRequest, DeliveryRequestDocument } from '@libs/database';
 import { RiderVerificationStatusEnum, RiderStatusEnum } from '@libs/common';
 import { NotificationService } from '@libs/common/modules/notification';
 import { NotificationRecipientType, NotificationChannel } from '@libs/database';
@@ -25,6 +25,7 @@ import {
 export class RiderManagementService {
   constructor(
     @InjectModel(Rider.name) private readonly riderModel: Model<RiderDocument>,
+    @InjectModel(DeliveryRequest.name) private readonly deliveryModel: Model<DeliveryRequestDocument>,
     private readonly notificationService: NotificationService,
   ) {}
 
@@ -257,6 +258,24 @@ export class RiderManagementService {
   async suspendRider(admin: Admin, id: string, body: SuspendRiderDto) {
     const rider = await this.riderModel.findById(id);
     if (!rider) throw new NotFoundException('Rider not found');
+
+    const activeDelivery = await this.deliveryModel.findOne({
+      rider: new Types.ObjectId(id),
+      status: {
+        $in: [
+          'rider_accepted', 'rider_assigned', 'rider_en_route_pickup',
+          'rider_arrived_pickup', 'awaiting_payment', 'payment_confirmed',
+          'pickup_in_progress', 'picked_up', 'in_transit',
+          'rider_arrived_dropoff', 'delivery_in_progress',
+        ],
+      },
+    }).select('_id trackingNumber status').lean();
+
+    if (activeDelivery) {
+      throw new BadRequestException(
+        `Cannot suspend rider with an active delivery (${activeDelivery.trackingNumber}, status: ${activeDelivery.status}). Complete or reassign the delivery first.`,
+      );
+    }
 
     await this.riderModel.updateOne(
       { _id: id },

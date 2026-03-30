@@ -7,6 +7,8 @@ import {
   RiderSchema,
   Admin,
   AdminSchema,
+  DeliveryRequest,
+  DeliveryRequestSchema,
 } from '@libs/database';
 import { NotificationModule } from '@libs/common/modules/notification';
 
@@ -15,6 +17,7 @@ import { NotificationModule } from '@libs/common/modules/notification';
     DatabaseModule.forFeature([
       { name: Rider.name, schema: RiderSchema },
       { name: Admin.name, schema: AdminSchema },
+      { name: DeliveryRequest.name, schema: DeliveryRequestSchema },
     ]),
     NotificationModule,
   ],

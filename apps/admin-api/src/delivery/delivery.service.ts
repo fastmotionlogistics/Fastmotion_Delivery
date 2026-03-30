@@ -317,7 +317,26 @@ export class DeliveryService {
 
     // Unassign previous rider
     if (previousRiderId) {
-      await this.riderModel.updateOne({ _id: previousRiderId }, { $inc: { currentDeliveryCount: -1 } });
+      // Decrement delivery count; if they have no remaining active deliveries set status back to available
+      const remainingActive = await this.deliveryModel.countDocuments({
+        rider: new Types.ObjectId(previousRiderId),
+        _id: { $ne: new Types.ObjectId(body.deliveryId) },
+        status: {
+          $in: [
+            'rider_accepted', 'rider_assigned', 'rider_en_route_pickup',
+            'rider_arrived_pickup', 'awaiting_payment', 'payment_confirmed',
+            'pickup_in_progress', 'picked_up', 'in_transit',
+            'rider_arrived_dropoff', 'delivery_in_progress',
+          ],
+        },
+      });
+      await this.riderModel.updateOne(
+        { _id: previousRiderId },
+        {
+          $inc: { currentDeliveryCount: -1 },
+          ...(remainingActive === 0 && { $set: { status: RiderStatusEnum.AVAILABLE } }),
+        },
+      );
       await this.notifyRider(previousRiderId, 'Delivery Reassigned', `Delivery ${delivery.trackingNumber} has been reassigned to another rider.`, {
         type: 'delivery_reassigned', deliveryId: body.deliveryId,
       });

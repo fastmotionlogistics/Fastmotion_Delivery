@@ -83,8 +83,15 @@ export class RiderMatchingService implements OnModuleInit {
 
       this.logger.log(`Found ${nearbyRiders.length} nearby riders for delivery ${deliveryIdStr}`);
 
+      const isPaid = delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID || delivery.paymentStatus === 'paid';
+
       if (nearbyRiders.length === 0) {
         this.logger.warn(`No riders available for delivery ${deliveryIdStr}`);
+        if (isPaid) {
+          this.gateway.emitMatchingUpdate(deliveryIdStr, { type: 'exhausted_retrying' });
+        } else {
+          await this.handleUnpaidExhausted(deliveryIdStr, delivery);
+        }
         return;
       }
 
@@ -99,6 +106,11 @@ export class RiderMatchingService implements OnModuleInit {
 
       if (riderList.length === 0) {
         this.logger.warn(`No riders available (after cooldown filter) for delivery ${deliveryIdStr}`);
+        if (isPaid) {
+          this.gateway.emitMatchingUpdate(deliveryIdStr, { type: 'exhausted_retrying' });
+        } else {
+          await this.handleUnpaidExhausted(deliveryIdStr, delivery);
+        }
         return;
       }
 
@@ -257,7 +269,15 @@ export class RiderMatchingService implements OnModuleInit {
           data: {
             type: 'new_delivery_request',
             deliveryId,
-            trackingNumber: requestPayload.trackingNumber,
+            trackingNumber: requestPayload.trackingNumber || '',
+            deliveryType: requestPayload.deliveryType || 'quick',
+            pickupAddress: requestPayload.pickupLocation?.address || '',
+            dropoffAddress: requestPayload.dropoffLocation?.address || '',
+            estimatedDistance: String(requestPayload.estimatedDistance || ''),
+            estimatedDuration: String(requestPayload.estimatedDuration || ''),
+            riderPayout: String(riderPayout),
+            totalPrice: String(requestPayload.pricing?.totalPrice || 0),
+            distanceFromRider: String(rider.distanceKm.toFixed(2)),
           },
         })
         .catch((e) => this.logger.warn(`Failed to push-notify rider ${riderId}: ${e.message}`));
