@@ -3,6 +3,7 @@ import { PaymentController } from './payment.controller';
 import { WebhookController } from './webhook.controller';
 import { PaymentService } from './payment.service';
 import { PaymentRepository } from './repository';
+import { RefundListener } from './listeners/refund.listener';
 import {
   DatabaseModule,
   Payment,
@@ -33,7 +34,7 @@ import { PendingDeliveryModule } from '@libs/common/modules/pending-delivery';
     // MonnifyModule is @Global() so no import needed
   ],
   controllers: [PaymentController, WebhookController],
-  providers: [PaymentService, PaymentRepository],
+  providers: [PaymentService, PaymentRepository, RefundListener],
   exports: [PaymentService],
 })
 export class PaymentModule {}

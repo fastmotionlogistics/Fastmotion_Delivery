@@ -661,7 +661,7 @@ export class DeliveryService {
         cancellationFee = pricingConfig?.cancellationFeeAfterAccept || 0;
       } else {
         // After pickup - percentage-based fee
-        const percentage = pricingConfig?.cancellationFeeAfterPickupPercentage || 0.5;
+        const percentage = pricingConfig?.cancellationFeeAfterPickupPercentage || 0;
         cancellationFee = Math.round(totalPaid * percentage);
       }
 
