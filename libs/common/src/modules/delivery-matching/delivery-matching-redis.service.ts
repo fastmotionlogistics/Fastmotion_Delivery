@@ -18,7 +18,7 @@ const ACTIVE_IDS_KEY = 'fm:matching:ids';
 export const COOLDOWN_TTL_SEC = 300;
 
 /** Request timeout in seconds (no response from rider) */
-export const REQUEST_TIMEOUT_SEC = 55;
+export const REQUEST_TIMEOUT_SEC = 16;
 
 /** Max riders to try per delivery */
 export const MAX_RIDERS = 10;
@@ -110,11 +110,7 @@ export class DeliveryMatchingRedisService implements OnModuleInit, OnModuleDestr
   }
 
   /** Initialize matching state and return first rider index (0) */
-  async initMatchingState(
-    deliveryId: string,
-    customerId: string,
-    riderIds: string[],
-  ): Promise<MatchingState | null> {
+  async initMatchingState(deliveryId: string, customerId: string, riderIds: string[]): Promise<MatchingState | null> {
     if (riderIds.length === 0) return null;
     const state: MatchingState = {
       deliveryId,

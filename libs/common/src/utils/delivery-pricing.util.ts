@@ -140,9 +140,7 @@ export function computeDeliveryPricing(input: DeliveryPricingInput): DeliveryPri
   } = input;
 
   const isInterZone =
-    pickupZone != null &&
-    dropoffZone != null &&
-    pickupZone._id.toString() !== dropoffZone._id.toString();
+    pickupZone != null && dropoffZone != null && pickupZone._id.toString() !== dropoffZone._id.toString();
 
   // ── Multipliers ───────────────────────────────────────────────────────────
   const zoneMultiplier = pickupZone?.priceMultiplier ?? 1.0;
@@ -156,25 +154,20 @@ export function computeDeliveryPricing(input: DeliveryPricingInput): DeliveryPri
   const timePrice = timePricing?.additionalFee ?? 0;
   const sizeFee = config.sizeFees?.[parcelSize] ?? 0;
 
-  // ── Subtotal — incremental multiplier application ─────────────────────────
-  // Each multiplier is applied to the running total in order so that each
-  // multiplier's displayed amount is its marginal contribution (incremental),
-  // ensuring breakdown rows sum exactly to the subtotal.
+  // ── Subtotal — additive multiplier application ───────────────────────────
+  // Each multiplier's incremental contribution is computed independently
+  // against preMultiplierBase (not chained), so they sum linearly.
+  // serviceFee is also derived from preMultiplierBase, not the inflated subtotal.
+  const dpreMultiplierBase = basePrice + distancePrice;
   const preMultiplierBase = basePrice + distancePrice + timePrice + sizeFee + catFee + handlingTotalFee;
 
-  const afterCat = Math.round(preMultiplierBase * categoryMultiplier);
-  const categoryMultiplierPrice = afterCat - preMultiplierBase;
+  const categoryMultiplierPrice = Math.round(preMultiplierBase * (categoryMultiplier - 1));
+  const zoneMultiplierPrice = Math.round(preMultiplierBase * (zoneMultiplier - 1));
+  const timeMultiplierPrice = Math.round(preMultiplierBase * (timeMultiplier - 1));
+  const interZoneMultiplierPrice = Math.round(preMultiplierBase * (interZoneMultiplier - 1));
 
-  const afterZone = Math.round(afterCat * zoneMultiplier);
-  const zoneMultiplierPrice = afterZone - afterCat;
-
-  const afterTime = Math.round(afterZone * timeMultiplier);
-  const timeMultiplierPrice = afterTime - afterZone;
-
-  const afterInterZone = Math.round(afterTime * interZoneMultiplier);
-  const interZoneMultiplierPrice = afterInterZone - afterTime;
-
-  let subtotal = afterInterZone;
+  let subtotal =
+    preMultiplierBase + categoryMultiplierPrice + zoneMultiplierPrice + timeMultiplierPrice + interZoneMultiplierPrice;
 
   // Clamp to min/max
   subtotal = Math.max(subtotal, config.minimumDeliveryFee);
@@ -188,8 +181,8 @@ export function computeDeliveryPricing(input: DeliveryPricingInput): DeliveryPri
     subtotal = subtotal + fctDevelopmentLevy;
   }
 
-  // ── Service fee ───────────────────────────────────────────────────────────
-  let serviceFee = Math.round(subtotal * (config.serviceFeePercentage ?? 0));
+  // ── Service fee (% of preMultiplierBase, not inflated subtotal) ───────────
+  let serviceFee = Math.round(dpreMultiplierBase * (config.serviceFeePercentage ?? 0));
   serviceFee = Math.max(serviceFee, config.minimumServiceFee ?? 0);
   if (config.maximumServiceFee) {
     serviceFee = Math.min(serviceFee, config.maximumServiceFee);
@@ -213,10 +206,7 @@ export function computeDeliveryPricing(input: DeliveryPricingInput): DeliveryPri
 
   // ── Rider earnings ────────────────────────────────────────────────────────
   const riderCommission = config.riderCommissionPercentage ?? 0.8;
-  const riderEarnings = Math.max(
-    Math.round(totalPrice * riderCommission),
-    config.minimumRiderPayout ?? 100,
-  );
+  const riderEarnings = Math.max(Math.round(totalPrice * riderCommission), config.minimumRiderPayout ?? 100);
 
   return {
     estimatedDistance: Math.round(distance * 100) / 100,
