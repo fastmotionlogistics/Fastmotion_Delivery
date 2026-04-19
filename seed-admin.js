@@ -343,7 +343,7 @@ async function main() {
         pricePerKm: 100,
         pricePerMinute: 0,
         minimumDeliveryFee: 700,
-        maximumDeliveryFee: 50000,
+        maximumDeliveryFee: 5000000,
         quickDeliveryMultiplier: 1.2,
         scheduledDeliveryMultiplier: 1.0,
         interZoneMultiplier: 1.3,
@@ -353,7 +353,7 @@ async function main() {
         parcelProtectionPercentage: 0.01,
         cancellationFeeBeforeAccept: 0,
         cancellationFeeAfterAccept: 300,
-        cancellationFeeAfterPickupPercentage: 0.5,
+        cancellationFeeAfterPickupPercentage: 0.8,
         sizeFees: { small: 0, medium: 200, large: 500, extra_large: 1000 },
         categoryMultipliers: {
           documents: 1.0,
