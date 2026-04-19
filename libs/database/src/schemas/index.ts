@@ -45,3 +45,6 @@ export * from './auditLog.schema';
 
 // Withdrawal Requests
 export * from './withdrawalRequest.schema';
+
+// App Content (Terms, Policy, FAQ, Contact)
+export * from './appContent.schema';

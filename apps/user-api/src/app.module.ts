@@ -11,6 +11,7 @@ import { UserModule } from './account/user.module';
 import { MessageModule, MessageService } from '@libs/common/modules';
 import { GatewayModule } from '@libs/common/modules/gateway';
 import { MonnifyModule } from '@libs/common/modules/monnify';
+import { PaystackModule } from '@libs/common/modules/paystack';
 
 // FastMotion Delivery Modules
 import { DeliveryModule } from './delivery/delivery.module';
@@ -19,6 +20,7 @@ import { RatingModule } from './rating/rating.module';
 import { DisputeModule } from './dispute/dispute.module';
 import { UserNotificationModule } from './notification/notification.module';
 import { AppVersionModule } from './app-version/app-version.module';
+import { AppContentModule } from './app-content/app-content.module';
 
 @Module({
   imports: [
@@ -62,8 +64,10 @@ import { AppVersionModule } from './app-version/app-version.module';
     DisputeModule,
     UserNotificationModule,
     AppVersionModule,
+    AppContentModule,
     GatewayModule,
     MonnifyModule,
+    PaystackModule,
   ],
   providers: [ShutdownService],
 })

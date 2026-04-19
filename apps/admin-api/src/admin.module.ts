@@ -16,6 +16,7 @@ import { RiderManagementModule } from './rider-management/rider-management.modul
 import { CatalogModule } from './catalog/catalog.module';
 import { AdminDisputeModule } from './dispute/dispute.module';
 import { AdminAppVersionModule } from './app-version/app-version.module';
+import { AdminAppContentModule } from './app-content/app-content.module';
 import { AdminNotificationModule } from './notification/notification.module';
 import { UserManagementModule } from './user-management/user-management.module';
 import { AdminEarningsModule } from './earnings/earnings.module';
@@ -75,6 +76,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     CatalogModule,
     AdminDisputeModule,
     AdminAppVersionModule,
+    AdminAppContentModule,
     AdminNotificationModule,
     UserManagementModule,
     AdminEarningsModule,

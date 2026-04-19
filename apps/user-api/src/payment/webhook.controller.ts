@@ -9,18 +9,8 @@ import {
 import { ApiTags, ApiOperation, ApiExcludeEndpoint } from '@nestjs/swagger';
 import { PaymentService } from './payment.service';
 import { MonnifyService, MonnifyWebhookPayload } from '@libs/common/modules/monnify';
+import { PaystackService, PaystackWebhookPayload } from '@libs/common/modules/paystack';
 
-/**
- * Webhook controller for Monnify payment notifications.
- *
- * Flow:
- * 1. User initiates payment → Monnify checkout page opens
- * 2. User pays via card/bank transfer on Monnify
- * 3. Monnify calls this webhook with payment result
- * 4. We verify signature, verify transaction with Monnify API, then complete the delivery payment
- *
- * No JWT auth — verified via Monnify HMAC-SHA512 signature.
- */
 @ApiTags('Webhooks')
 @Controller('webhooks')
 export class WebhookController {
@@ -29,7 +19,76 @@ export class WebhookController {
   constructor(
     private readonly paymentService: PaymentService,
     private readonly monnifyService: MonnifyService,
+    private readonly paystackService: PaystackService,
   ) {}
+
+  // ═══════════════════════════════════════
+  //  PAYSTACK WEBHOOK
+  // ═══════════════════════════════════════
+
+  @ApiExcludeEndpoint()
+  @ApiOperation({ summary: 'Paystack webhook for payment notifications' })
+  @Post('paystack')
+  @HttpCode(200)
+  async handlePaystackWebhook(
+    @Body() body: PaystackWebhookPayload,
+    @Headers('x-paystack-signature') signature: string,
+  ) {
+    this.logger.log(`[Paystack Webhook] Event: ${body.event}, Ref: ${body.data?.reference}`);
+
+    // 1. Verify webhook signature
+    if (!signature || !this.paystackService.verifyWebhookSignature(body, signature)) {
+      this.logger.warn('[Paystack Webhook] Invalid signature — rejecting');
+      return { status: 'error', message: 'Invalid signature' };
+    }
+
+    const { event, data } = body;
+
+    if (!data || !data.reference) {
+      this.logger.warn('[Paystack Webhook] Missing event data');
+      return { status: 'error', message: 'Missing event data' };
+    }
+
+    try {
+      if (event === 'charge.success') {
+        // Double-verify with Paystack API
+        const verification = await this.paystackService.verifyPayment(data.reference);
+        const verifiedStatus = verification.data?.status;
+
+        this.logger.log(
+          `[Paystack Webhook] Verified status: ${verifiedStatus} for ref: ${data.reference}`,
+        );
+
+        if (this.paystackService.isPaymentSuccessful(verifiedStatus)) {
+          await this.paymentService.handleWebhookPaymentSuccess(
+            data.reference,
+            {
+              providerReference: verification.data?.reference,
+              providerResponse: JSON.stringify(verification.data),
+              amount: verification.data?.amount / 100, // kobo → naira
+            },
+          );
+          this.logger.log(`[Paystack Webhook] Payment completed: ${data.reference}`);
+        } else if (this.paystackService.isPaymentFailed(verifiedStatus)) {
+          await this.paymentService.handleWebhookPaymentFailed(
+            data.reference,
+            {
+              providerResponse: JSON.stringify(verification.data),
+            },
+          );
+          this.logger.log(`[Paystack Webhook] Payment failed: ${data.reference}`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`[Paystack Webhook] Error processing: ${error.message}`, error.stack);
+    }
+
+    return { status: 'success' };
+  }
+
+  // ═══════════════════════════════════════
+  //  MONNIFY WEBHOOK (legacy — kept for in-flight payments)
+  // ═══════════════════════════════════════
 
   @ApiExcludeEndpoint()
   @ApiOperation({ summary: 'Monnify webhook for payment notifications' })
@@ -41,7 +100,6 @@ export class WebhookController {
   ) {
     this.logger.log(`[Monnify Webhook] Event: ${body.eventType}, Ref: ${body.eventData?.paymentReference}`);
 
-    // 1. Verify webhook signature
     if (!signature || !this.monnifyService.verifyWebhookSignature(body, signature)) {
       this.logger.warn('[Monnify Webhook] Invalid signature — rejecting');
       return { status: 'error', message: 'Invalid signature' };
@@ -55,7 +113,6 @@ export class WebhookController {
     }
 
     try {
-      // 2. Verify transaction with Monnify API (double-check)
       const verification = await this.monnifyService.verifyPayment(eventData.transactionReference);
       const verifiedStatus = verification.responseBody?.paymentStatus;
 
@@ -64,7 +121,6 @@ export class WebhookController {
       );
 
       if (this.monnifyService.isPaymentSuccessful(verifiedStatus)) {
-        // 3. Process successful payment
         await this.paymentService.handleWebhookPaymentSuccess(
           eventData.paymentReference,
           {
@@ -76,7 +132,6 @@ export class WebhookController {
 
         this.logger.log(`[Monnify Webhook] Payment completed: ${eventData.paymentReference}`);
       } else if (this.monnifyService.isPaymentFailed(verifiedStatus)) {
-        // 4. Process failed payment
         await this.paymentService.handleWebhookPaymentFailed(
           eventData.paymentReference,
           {
@@ -92,7 +147,6 @@ export class WebhookController {
       this.logger.error(`[Monnify Webhook] Error processing: ${error.message}`, error.stack);
     }
 
-    // Always return 200 to Monnify so they don't retry
     return { status: 'success' };
   }
 }
