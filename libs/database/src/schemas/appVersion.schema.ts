@@ -46,6 +46,34 @@ export class AppVersion extends AbstractDocument {
   @Prop({ type: String, default: '' })
   iosStoreUrl: string;
 
+  @Prop({
+    type: [
+      {
+        currentVersion: String,
+        minimumVersion: String,
+        maintenanceMode: Boolean,
+        updateTitle: String,
+        updateMessage: String,
+        releaseNotes: String,
+        androidStoreUrl: String,
+        iosStoreUrl: String,
+        updatedAt: Date,
+      },
+    ],
+    default: [],
+  })
+  versionHistory: Array<{
+    currentVersion: string;
+    minimumVersion: string;
+    maintenanceMode: boolean;
+    updateTitle: string;
+    updateMessage: string;
+    releaseNotes: string;
+    androidStoreUrl: string;
+    iosStoreUrl: string;
+    updatedAt: Date;
+  }>;
+
   createdAt?: Date;
   updatedAt?: Date;
 }
