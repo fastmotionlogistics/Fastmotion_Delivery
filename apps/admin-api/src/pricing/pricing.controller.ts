@@ -252,6 +252,7 @@ export class PricingController {
       category?: string;
       deliveryType: string;
       scheduledTime?: string;
+      estimatedDistance?: number;
     },
   ) {
     return await this.pricingService.calculatePrice(body);

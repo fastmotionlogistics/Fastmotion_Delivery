@@ -246,6 +246,7 @@ export class DeliveryService {
           categoryMultiplierPrice: pricing.breakdown.categoryMultiplierPrice,
           timeMultiplierPrice: pricing.breakdown.timeMultiplierPrice,
           zoneMultiplierPrice: pricing.breakdown.zoneMultiplierPrice,
+          interZoneMultiplierPrice: pricing.breakdown.interZoneMultiplierPrice,
           serviceFee: pricing.breakdown.serviceFee,
           discountAmount: pricing.breakdown.discountAmount,
           subtotal: pricing.breakdown.subtotal,
@@ -259,6 +260,7 @@ export class DeliveryService {
           time: pricing.breakdown.timeMultiplier,
           // size: pricing.breakdown.sizeMultiplier,
           category: pricing.breakdown.categoryMultiplier,
+          interZone: pricing.breakdown.interZoneMultiplier,
           deliveryType: pricing.breakdown.deliveryTypeMultiplier,
         },
         couponApplied: pricing.coupon

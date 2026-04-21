@@ -155,19 +155,18 @@ export function computeDeliveryPricing(input: DeliveryPricingInput): DeliveryPri
   const sizeFee = config.sizeFees?.[parcelSize] ?? 0;
 
   // ── Subtotal — additive multiplier application ───────────────────────────
-  // Each multiplier's incremental contribution is computed independently
-  // against preMultiplierBase (not chained), so they sum linearly.
-  // serviceFee is also derived from preMultiplierBase, not the inflated subtotal.
-  const dpreMultiplierBase = basePrice + distancePrice;
-  const preMultiplierBase = basePrice + distancePrice + timePrice + sizeFee + catFee + handlingTotalFee;
+  // Multipliers apply only to base + distance (the core fare).
+  // Flat fees (size, time, category additional, handling) are added after.
+  const basePlusDistance = basePrice + distancePrice;
 
-  const categoryMultiplierPrice = Math.round(preMultiplierBase * (categoryMultiplier - 1));
-  const zoneMultiplierPrice = Math.round(preMultiplierBase * (zoneMultiplier - 1));
-  const timeMultiplierPrice = Math.round(preMultiplierBase * (timeMultiplier - 1));
-  const interZoneMultiplierPrice = Math.round(preMultiplierBase * (interZoneMultiplier - 1));
+  const categoryMultiplierPrice = Math.round(basePlusDistance * (categoryMultiplier - 1));
+  const zoneMultiplierPrice = Math.round(basePlusDistance * (zoneMultiplier - 1));
+  const timeMultiplierPrice = Math.round(basePlusDistance * (timeMultiplier - 1));
+  const interZoneMultiplierPrice = Math.round(basePlusDistance * (interZoneMultiplier - 1));
 
   let subtotal =
-    preMultiplierBase + categoryMultiplierPrice + zoneMultiplierPrice + timeMultiplierPrice + interZoneMultiplierPrice;
+    basePlusDistance + categoryMultiplierPrice + zoneMultiplierPrice + timeMultiplierPrice + interZoneMultiplierPrice
+    + timePrice + sizeFee + catFee + handlingTotalFee;
 
   // Clamp to min/max
   subtotal = Math.max(subtotal, config.minimumDeliveryFee);
@@ -181,8 +180,8 @@ export function computeDeliveryPricing(input: DeliveryPricingInput): DeliveryPri
     subtotal = subtotal + fctDevelopmentLevy;
   }
 
-  // ── Service fee (% of preMultiplierBase, not inflated subtotal) ───────────
-  let serviceFee = Math.round(dpreMultiplierBase * (config.serviceFeePercentage ?? 0));
+  // ── Service fee (% of base + distance only) ──────────────────────────────
+  let serviceFee = Math.round(basePlusDistance * (config.serviceFeePercentage ?? 0));
   serviceFee = Math.max(serviceFee, config.minimumServiceFee ?? 0);
   if (config.maximumServiceFee) {
     serviceFee = Math.min(serviceFee, config.maximumServiceFee);

@@ -488,6 +488,7 @@ export class PricingService {
     category?: string;
     deliveryType: string;
     scheduledTime?: string;
+    estimatedDistance?: number;
   }) {
     // 1. Get active pricing config
     const config = await this.pricingConfigModel
@@ -505,14 +506,16 @@ export class PricingService {
       throw new BadRequestException('No active pricing configuration found. Please create one first.');
     }
 
-    // 2. Distance via Haversine (admin preview — no client-provided distance)
+    // 2. Distance — use client-provided Google Maps distance if available, otherwise Haversine
     const pickupLat = parseFloat(body.pickupLatitude);
     const pickupLng = parseFloat(body.pickupLongitude);
     const dropoffLat = parseFloat(body.dropoffLatitude);
     const dropoffLng = parseFloat(body.dropoffLongitude);
 
-    const distance = this.geoZoneService.haversineDistance(pickupLat, pickupLng, dropoffLat, dropoffLng);
-    const duration = Math.ceil((distance / 30) * 60); // ~30 km/h average
+    const distance = body.estimatedDistance && body.estimatedDistance > 0
+      ? body.estimatedDistance
+      : this.geoZoneService.haversineDistance(pickupLat, pickupLng, dropoffLat, dropoffLng);
+    const duration = Math.ceil((distance / 30) * 60);
 
     // 3. Resolve zones & time pricing
     const [pickupZone, dropoffZone] = await Promise.all([
@@ -561,6 +564,12 @@ export class PricingService {
           distancePrice: result.breakdown.distancePrice,
           sizeFee: result.breakdown.sizeFee,
           timePrice: result.breakdown.timePrice,
+          categoryAdditionalFee: result.breakdown.categoryAdditionalFee,
+          handlingFee: result.breakdown.handlingFee,
+          categoryMultiplierPrice: result.breakdown.categoryMultiplierPrice,
+          zoneMultiplierPrice: result.breakdown.zoneMultiplierPrice,
+          timeMultiplierPrice: result.breakdown.timeMultiplierPrice,
+          interZoneMultiplierPrice: result.breakdown.interZoneMultiplierPrice,
           serviceFee: result.breakdown.serviceFee,
           fctDevelopmentLevy: result.breakdown.fctDevelopmentLevy,
           subtotal: result.breakdown.subtotal,
