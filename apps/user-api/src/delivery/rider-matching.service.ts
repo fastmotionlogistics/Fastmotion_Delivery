@@ -457,4 +457,33 @@ export class RiderMatchingService implements OnModuleInit {
       this.logger.warn(`retryPaidExhaustedDeliveries error: ${e?.message || e}`);
     }
   }
+
+  /** Every 10 min: cancel pay-at-pickup deliveries stuck searching for over 1 hour */
+  @Interval(600000)
+  async cancelStalePayAtPickupDeliveries() {
+    try {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const deliveries = await this.deliveryModel
+        .find({
+          status: DeliveryStatusEnum.SEARCHING_RIDER,
+          paymentRequiredAtPickup: true,
+          rider: { $in: [null, undefined] },
+          createdAt: { $lte: oneHourAgo },
+        })
+        .select('_id customer trackingNumber')
+        .lean();
+
+      for (const d of deliveries) {
+        const deliveryIdStr = d._id.toString();
+        this.logger.log(`Cancelling stale pay-at-pickup delivery ${deliveryIdStr} (searching > 1 hour)`);
+        await this.handleUnpaidExhausted(deliveryIdStr, d);
+      }
+
+      if (deliveries.length > 0) {
+        this.logger.log(`Cancelled ${deliveries.length} stale pay-at-pickup deliveries`);
+      }
+    } catch (e) {
+      this.logger.warn(`cancelStalePayAtPickupDeliveries error: ${e?.message || e}`);
+    }
+  }
 }
