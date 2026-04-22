@@ -351,8 +351,11 @@ export class RiderMatchingService implements OnModuleInit {
     const state = await this.matchingRedis.advanceToNextRider(deliveryIdStr);
     if (!state) {
       this.logger.log(`All riders exhausted for delivery ${deliveryIdStr}`);
-      const isPaid = delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID || delivery.paymentStatus === 'paid';
-      if (isPaid) {
+      const isPaidOrPayAtPickup =
+        delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID ||
+        delivery.paymentStatus === 'paid' ||
+        delivery.paymentRequiredAtPickup === true;
+      if (isPaidOrPayAtPickup) {
         // Paid: clear Redis so retry cron can re-init; do not cancel
         await this.matchingRedis.deleteMatchingState(deliveryIdStr);
         this.gateway.emitMatchingUpdate(deliveryIdStr, { type: 'exhausted_retrying' });
@@ -430,8 +433,11 @@ export class RiderMatchingService implements OnModuleInit {
       const deliveries = await this.deliveryModel
         .find({
           status: DeliveryStatusEnum.SEARCHING_RIDER,
-          paymentStatus: DeliveryPaymentStatusEnum.PAID,
-          $or: [{ rider: null }, { rider: { $exists: false } }],
+          $or: [
+            { paymentStatus: DeliveryPaymentStatusEnum.PAID },
+            { paymentRequiredAtPickup: true },
+          ],
+          rider: { $in: [null, undefined] },
           deliveryType: 'quick',
         })
         .select('_id pickupLocation')
