@@ -12,7 +12,7 @@ async function bootstrap() {
 
   app.enableCors({
     origin: [
-      'https://backoffice.fastmotionlogisticsltd.com/',
+      'https://backoffice.fastmotionlogisticsltd.com',
       'https://fastmotionbackoffice.netlify.app',
       'http://localhost:5173',
     ],
