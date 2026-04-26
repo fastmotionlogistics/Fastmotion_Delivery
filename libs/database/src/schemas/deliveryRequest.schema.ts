@@ -430,6 +430,15 @@ export class DeliveryRequest extends AbstractDocument {
   @Prop({ type: Boolean, default: false })
   showRiderContact: boolean;
 
+  // Scheduled delivery reminders
+  @ApiProperty()
+  @Prop({ type: Boolean, default: false })
+  scheduledReminder30Sent: boolean;
+
+  @ApiProperty()
+  @Prop({ type: Boolean, default: false })
+  scheduledReminder10Sent: boolean;
+
   // Additional metadata
   @ApiProperty()
   @Prop({ type: Object, required: false })

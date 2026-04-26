@@ -146,6 +146,7 @@ export class RiderMatchingService implements OnModuleInit {
         riderPayout,
         commissionRate,
         createdAt: delivery.createdAt,
+        scheduledPickupTime: delivery.scheduledPickupTime,
       };
 
       await this.sendRequestToRider(riderList[0], requestPayload, pickupLocation, riderPayout, 1, riderList.length);
@@ -285,6 +286,7 @@ export class RiderMatchingService implements OnModuleInit {
             riderPayout: String(riderPayout),
             totalPrice: String(requestPayload.pricing?.totalPrice || 0),
             distanceFromRider: String(rider.distanceKm.toFixed(2)),
+            scheduledPickupTime: requestPayload.scheduledPickupTime ? String(requestPayload.scheduledPickupTime) : '',
           },
         })
         .catch((e) => this.logger.warn(`Failed to push-notify rider ${riderId}: ${e.message}`));
@@ -396,6 +398,7 @@ export class RiderMatchingService implements OnModuleInit {
       riderPayout,
       commissionRate,
       createdAt: delivery.createdAt,
+      scheduledPickupTime: delivery.scheduledPickupTime,
     };
     const riderWithDist = { ...rider, distanceKm } as unknown as RiderDocument & { distanceKm: number };
     await this.sendRequestToRider(
@@ -491,6 +494,83 @@ export class RiderMatchingService implements OnModuleInit {
       }
     } catch (e) {
       this.logger.warn(`cancelStalePayAtPickupDeliveries error: ${e?.message || e}`);
+    }
+  }
+
+  /** Every 60 seconds: send reminder notifications for upcoming scheduled deliveries */
+  @Interval(60000)
+  async sendScheduledDeliveryReminders() {
+    try {
+      const now = new Date();
+      const in30 = new Date(now.getTime() + 30 * 60 * 1000);
+      const in10 = new Date(now.getTime() + 10 * 60 * 1000);
+
+      // 30-minute reminders
+      const remind30 = await this.deliveryModel
+        .find({
+          deliveryType: 'scheduled',
+          status: DeliveryStatusEnum.RIDER_ASSIGNED,
+          rider: { $exists: true, $ne: null },
+          scheduledPickupTime: { $lte: in30, $gt: in10 },
+          scheduledReminder30Sent: { $ne: true },
+        })
+        .select('_id rider scheduledPickupTime trackingNumber pickupLocation')
+        .lean();
+
+      for (const d of remind30) {
+        const rider = await this.riderModel.findById(d.rider).select('fcmToken firstName').lean();
+        if (rider?.fcmToken) {
+          const time = new Date(d.scheduledPickupTime).toLocaleString('en-NG', {
+            hour: '2-digit', minute: '2-digit',
+          });
+          await this.notificationService.send({
+            recipientId: d.rider,
+            recipientType: NotificationRecipientType.RIDER,
+            title: 'Upcoming Delivery in 30 min ⏰',
+            body: `Scheduled pickup at ${d.pickupLocation?.address || 'pickup location'} by ${time}. Delivery: ${d.trackingNumber}`,
+            token: rider.fcmToken,
+            data: { type: 'scheduled_reminder', deliveryId: d._id.toString(), trackingNumber: d.trackingNumber },
+          }).catch(() => {});
+        }
+        await this.deliveryModel.updateOne({ _id: d._id }, { $set: { scheduledReminder30Sent: true } });
+      }
+
+      // 10-minute reminders
+      const remind10 = await this.deliveryModel
+        .find({
+          deliveryType: 'scheduled',
+          status: DeliveryStatusEnum.RIDER_ASSIGNED,
+          rider: { $exists: true, $ne: null },
+          scheduledPickupTime: { $lte: in10, $gt: now },
+          scheduledReminder10Sent: { $ne: true },
+        })
+        .select('_id rider scheduledPickupTime trackingNumber pickupLocation')
+        .lean();
+
+      for (const d of remind10) {
+        const rider = await this.riderModel.findById(d.rider).select('fcmToken firstName').lean();
+        if (rider?.fcmToken) {
+          const time = new Date(d.scheduledPickupTime).toLocaleString('en-NG', {
+            hour: '2-digit', minute: '2-digit',
+          });
+          await this.notificationService.send({
+            recipientId: d.rider,
+            recipientType: NotificationRecipientType.RIDER,
+            title: 'Delivery Starting Soon! 🚀',
+            body: `Your scheduled pickup at ${d.pickupLocation?.address || 'pickup location'} is in ~10 minutes (${time}). Head to pickup now!`,
+            token: rider.fcmToken,
+            data: { type: 'scheduled_reminder_urgent', deliveryId: d._id.toString(), trackingNumber: d.trackingNumber },
+          }).catch(() => {});
+        }
+        await this.deliveryModel.updateOne({ _id: d._id }, { $set: { scheduledReminder10Sent: true } });
+      }
+
+      const total = remind30.length + remind10.length;
+      if (total > 0) {
+        this.logger.log(`Sent ${remind30.length} x 30-min + ${remind10.length} x 10-min scheduled reminders`);
+      }
+    } catch (e) {
+      this.logger.warn(`sendScheduledDeliveryReminders error: ${e?.message || e}`);
     }
   }
 }

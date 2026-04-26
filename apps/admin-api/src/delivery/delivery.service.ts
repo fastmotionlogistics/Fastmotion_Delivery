@@ -268,32 +268,40 @@ export class DeliveryService {
       throw new BadRequestException('Rider has reached maximum concurrent delivery limit');
     }
 
-    // Assign
+    // Set to pending acceptance — rider must explicitly accept
     delivery.rider = new Types.ObjectId(body.riderId) as any;
-    delivery.status = DeliveryStatusEnum.RIDER_ASSIGNED;
+    delivery.status = DeliveryStatusEnum.PENDING_ACCEPTANCE;
     delivery.riderAssignedAt = new Date();
-    delivery.canReschedule = false;
     await delivery.save();
 
-    await this.riderModel.updateOne(
-      { _id: body.riderId },
-      { $inc: { currentDeliveryCount: 1 }, $set: { status: RiderStatusEnum.ON_DELIVERY } },
-    );
+    // Don't increment currentDeliveryCount until rider actually starts the delivery
 
     await this.logAdminAction(body.deliveryId, 'rider_assign', body.reason || 'Admin assignment', null, { riderId: body.riderId });
 
-    // Push notifications
-    await this.notifyRider(body.riderId, 'New Delivery Assigned', `You have been assigned delivery ${delivery.trackingNumber}. Check the details.`, {
-      type: 'delivery_assigned', deliveryId: body.deliveryId, trackingNumber: delivery.trackingNumber,
-    });
-    await this.notifyUser(delivery.customer, 'Rider Assigned', `A rider has been assigned to your delivery ${delivery.trackingNumber}.`, {
+    const scheduledTime = delivery.scheduledPickupTime
+      ? new Date(delivery.scheduledPickupTime).toLocaleString('en-NG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : '';
+
+    // Push notification to rider
+    await this.notifyRider(
+      body.riderId,
+      'Scheduled Delivery Assignment 📅',
+      `You have been assigned a scheduled delivery ${delivery.trackingNumber}${scheduledTime ? ` for ${scheduledTime}` : ''}. Please accept or reject.`,
+      {
+        type: 'scheduled_delivery_assigned',
+        deliveryId: body.deliveryId,
+        trackingNumber: delivery.trackingNumber,
+        scheduledPickupTime: delivery.scheduledPickupTime ? String(delivery.scheduledPickupTime) : '',
+      },
+    );
+    await this.notifyUser(delivery.customer, 'Rider Assigned', `A rider has been assigned to your delivery ${delivery.trackingNumber}. Awaiting rider confirmation.`, {
       type: 'rider_assigned', deliveryId: body.deliveryId, trackingNumber: delivery.trackingNumber,
     });
 
     return {
       success: true,
-      message: 'Rider assigned successfully',
-      data: { deliveryId: body.deliveryId, riderId: body.riderId, status: DeliveryStatusEnum.RIDER_ASSIGNED },
+      message: 'Rider assigned — awaiting rider acceptance',
+      data: { deliveryId: body.deliveryId, riderId: body.riderId, status: DeliveryStatusEnum.PENDING_ACCEPTANCE },
     };
   }
 
@@ -314,49 +322,75 @@ export class DeliveryService {
     }
 
     const previousRiderId = delivery.rider?.toString();
+    const wasPendingAcceptance = delivery.status === DeliveryStatusEnum.PENDING_ACCEPTANCE;
+    const wasRiderAssignedScheduled =
+      delivery.status === DeliveryStatusEnum.RIDER_ASSIGNED &&
+      delivery.deliveryType === DeliveryTypeEnum.SCHEDULED;
 
     // Unassign previous rider
     if (previousRiderId) {
-      // Decrement delivery count; if they have no remaining active deliveries set status back to available
-      const remainingActive = await this.deliveryModel.countDocuments({
-        rider: new Types.ObjectId(previousRiderId),
-        _id: { $ne: new Types.ObjectId(body.deliveryId) },
-        status: {
-          $in: [
-            'rider_accepted', 'rider_assigned', 'rider_en_route_pickup',
-            'rider_arrived_pickup', 'awaiting_payment', 'payment_confirmed',
-            'pickup_in_progress', 'picked_up', 'in_transit',
-            'rider_arrived_dropoff', 'delivery_in_progress',
-          ],
-        },
-      });
-      await this.riderModel.updateOne(
-        { _id: previousRiderId },
-        {
-          $inc: { currentDeliveryCount: -1 },
-          ...(remainingActive === 0 && { $set: { status: RiderStatusEnum.AVAILABLE } }),
-        },
-      );
+      // Only decrement count if the delivery was actively counting against the rider
+      const shouldDecrementCount = !wasPendingAcceptance && !wasRiderAssignedScheduled;
+      if (shouldDecrementCount) {
+        const remainingActive = await this.deliveryModel.countDocuments({
+          rider: new Types.ObjectId(previousRiderId),
+          _id: { $ne: new Types.ObjectId(body.deliveryId) },
+          status: {
+            $in: [
+              'rider_accepted', 'rider_assigned', 'rider_en_route_pickup',
+              'rider_arrived_pickup', 'awaiting_payment', 'payment_confirmed',
+              'pickup_in_progress', 'picked_up', 'in_transit',
+              'rider_arrived_dropoff', 'delivery_in_progress',
+            ],
+          },
+        });
+        await this.riderModel.updateOne(
+          { _id: previousRiderId },
+          {
+            $inc: { currentDeliveryCount: -1 },
+            ...(remainingActive === 0 && { $set: { status: RiderStatusEnum.AVAILABLE } }),
+          },
+        );
+      }
       await this.notifyRider(previousRiderId, 'Delivery Reassigned', `Delivery ${delivery.trackingNumber} has been reassigned to another rider.`, {
         type: 'delivery_reassigned', deliveryId: body.deliveryId,
       });
     }
 
-    // Assign new rider
+    // Assign new rider — scheduled deliveries go back to pending acceptance
     delivery.rider = new Types.ObjectId(body.riderId) as any;
     delivery.riderAssignedAt = new Date();
+    if (delivery.deliveryType === DeliveryTypeEnum.SCHEDULED) {
+      delivery.status = DeliveryStatusEnum.PENDING_ACCEPTANCE as any;
+    }
     await delivery.save();
 
-    await this.riderModel.updateOne(
-      { _id: body.riderId },
-      { $inc: { currentDeliveryCount: 1 }, $set: { status: RiderStatusEnum.ON_DELIVERY } },
-    );
+    // For non-scheduled active deliveries, increment count for new rider
+    if (delivery.deliveryType !== DeliveryTypeEnum.SCHEDULED) {
+      await this.riderModel.updateOne(
+        { _id: body.riderId },
+        { $inc: { currentDeliveryCount: 1 }, $set: { status: RiderStatusEnum.ON_DELIVERY } },
+      );
+    }
 
     await this.logAdminAction(body.deliveryId, 'rider_reassign', body.reason || 'Admin reassignment', { previousRiderId }, { riderId: body.riderId });
 
-    await this.notifyRider(body.riderId, 'New Delivery Assigned', `You have been assigned delivery ${delivery.trackingNumber}.`, {
-      type: 'delivery_assigned', deliveryId: body.deliveryId, trackingNumber: delivery.trackingNumber,
-    });
+    const scheduledTime = delivery.scheduledPickupTime
+      ? new Date(delivery.scheduledPickupTime).toLocaleString('en-NG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : '';
+
+    if (delivery.deliveryType === DeliveryTypeEnum.SCHEDULED) {
+      await this.notifyRider(
+        body.riderId,
+        'Scheduled Delivery Assignment 📅',
+        `You have been assigned a scheduled delivery ${delivery.trackingNumber}${scheduledTime ? ` for ${scheduledTime}` : ''}. Please accept or reject.`,
+        { type: 'scheduled_delivery_assigned', deliveryId: body.deliveryId, trackingNumber: delivery.trackingNumber, scheduledPickupTime: delivery.scheduledPickupTime ? String(delivery.scheduledPickupTime) : '' },
+      );
+    } else {
+      await this.notifyRider(body.riderId, 'New Delivery Assigned', `You have been assigned delivery ${delivery.trackingNumber}.`, {
+        type: 'delivery_assigned', deliveryId: body.deliveryId, trackingNumber: delivery.trackingNumber,
+      });
+    }
     await this.notifyUser(delivery.customer, 'Rider Changed', `A new rider has been assigned to your delivery ${delivery.trackingNumber}.`, {
       type: 'rider_reassigned', deliveryId: body.deliveryId, trackingNumber: delivery.trackingNumber,
     });

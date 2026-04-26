@@ -65,6 +65,12 @@ export class DeliveryController {
     return await this.deliveryService.getDeliveryHistory(rider, { page, limit });
   }
 
+  @ApiOperation({ summary: 'Get scheduled deliveries assigned to this rider' })
+  @Get('scheduled')
+  async getScheduledDeliveries(@CurrentRider() rider: Rider) {
+    return await this.deliveryService.getScheduledDeliveries(rider);
+  }
+
   @ApiOperation({ summary: 'Get delivery request details' })
   @Get(':id')
   async getDeliveryById(@CurrentRider() rider: Rider, @Param('id') id: string) {
@@ -151,5 +157,17 @@ export class DeliveryController {
   @Get('summary/today')
   async getTodaySummary(@CurrentRider() rider: Rider) {
     return await this.deliveryService.getTodaySummary(rider);
+  }
+
+  @ApiOperation({ summary: 'Accept a scheduled delivery assignment' })
+  @Post(':id/accept-scheduled')
+  async acceptScheduledDelivery(@CurrentRider() rider: Rider, @Param('id') id: string) {
+    return await this.deliveryService.acceptScheduledDelivery(rider, id);
+  }
+
+  @ApiOperation({ summary: 'Reject a scheduled delivery assignment' })
+  @Post(':id/reject-scheduled')
+  async rejectScheduledDelivery(@CurrentRider() rider: Rider, @Param('id') id: string) {
+    return await this.deliveryService.rejectScheduledDelivery(rider, id);
   }
 }

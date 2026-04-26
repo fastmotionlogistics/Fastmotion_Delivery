@@ -30,6 +30,7 @@ import { EarningsService } from '../earnings/earnings.service';
 const VALID_TRANSITIONS: Record<string, string[]> = {
   [DeliveryStatusEnum.RIDER_ACCEPTED]: [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP],
   [DeliveryStatusEnum.RIDER_ASSIGNED]: [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP],
+  [DeliveryStatusEnum.PENDING_ACCEPTANCE]: [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP],
   [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP]: [DeliveryStatusEnum.RIDER_ARRIVED_PICKUP],
   [DeliveryStatusEnum.RIDER_ARRIVED_PICKUP]: [
     DeliveryStatusEnum.AWAITING_PAYMENT,
@@ -46,6 +47,7 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 
 // Human-readable status labels for system chat messages
 const STATUS_LABELS: Record<string, string> = {
+  [DeliveryStatusEnum.PENDING_ACCEPTANCE]: 'Rider assignment pending acceptance',
   [DeliveryStatusEnum.RIDER_ACCEPTED]: 'Rider has accepted the delivery',
   [DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP]: 'Rider is on the way to pickup location',
   [DeliveryStatusEnum.RIDER_ARRIVED_PICKUP]: 'Rider has arrived at pickup location',
@@ -213,7 +215,15 @@ export class DeliveryService {
     ];
 
     const deliveries = await this.deliveryModel
-      .find({ rider: rider._id, status: { $in: activeStatuses } })
+      .find({
+        rider: rider._id,
+        status: { $in: activeStatuses },
+        // Exclude scheduled deliveries that haven't started yet (shown in scheduled section instead)
+        $nor: [
+          { deliveryType: DeliveryTypeEnum.SCHEDULED, status: DeliveryStatusEnum.RIDER_ASSIGNED },
+          { deliveryType: DeliveryTypeEnum.SCHEDULED, status: DeliveryStatusEnum.PENDING_ACCEPTANCE },
+        ],
+      })
       .sort({ createdAt: -1 })
       .populate('customer', 'firstName lastName phone')
       .lean();
@@ -294,7 +304,7 @@ export class DeliveryService {
 
     // Rider can only view if they are assigned or it's still available
     const isAssigned = delivery.rider?.toString() === rider._id.toString();
-    const isAvailable = [DeliveryStatusEnum.SEARCHING_RIDER, DeliveryStatusEnum.PENDING].includes(
+    const isAvailable = [DeliveryStatusEnum.SEARCHING_RIDER, DeliveryStatusEnum.PENDING, DeliveryStatusEnum.PENDING_ACCEPTANCE].includes(
       delivery.status as DeliveryStatusEnum,
     );
 
@@ -492,6 +502,19 @@ export class DeliveryService {
 
     // Build update fields based on new status
     const updateFields: Record<string, any> = { status: newStatus };
+
+    // For scheduled deliveries, increment rider count when they actually start
+    const isScheduledStart =
+      delivery.deliveryType === DeliveryTypeEnum.SCHEDULED &&
+      newStatus === DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP &&
+      [DeliveryStatusEnum.RIDER_ASSIGNED, DeliveryStatusEnum.PENDING_ACCEPTANCE].includes(currentStatus as DeliveryStatusEnum);
+
+    if (isScheduledStart) {
+      await this.riderModel.updateOne(
+        { _id: rider._id },
+        { $inc: { currentDeliveryCount: 1 }, $set: { status: RiderStatusEnum.ON_DELIVERY } },
+      );
+    }
 
     switch (newStatus) {
       case DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP:
@@ -869,6 +892,7 @@ export class DeliveryService {
     const validStatuses = [
       DeliveryStatusEnum.RIDER_ACCEPTED,
       DeliveryStatusEnum.RIDER_ASSIGNED,
+      DeliveryStatusEnum.PENDING_ACCEPTANCE,
       DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP,
     ];
 
@@ -1049,6 +1073,125 @@ export class DeliveryService {
         hoursOnline: 0, // Would need online time tracking — placeholder
         currency: 'NGN',
       },
+    };
+  }
+
+  // ═══════════════════════════════════════════════
+  //  SCHEDULED DELIVERIES
+  // ═══════════════════════════════════════════════
+
+  async getScheduledDeliveries(rider: Rider) {
+    const deliveries = await this.deliveryModel
+      .find({
+        rider: rider._id,
+        deliveryType: DeliveryTypeEnum.SCHEDULED,
+        status: { $in: [DeliveryStatusEnum.PENDING_ACCEPTANCE, DeliveryStatusEnum.RIDER_ASSIGNED] },
+      })
+      .sort({ scheduledPickupTime: 1 })
+      .populate('customer', 'firstName lastName phone')
+      .lean();
+
+    const { rate, min } = await this.getCommissionConfig();
+    const withPayout = deliveries.map((d) => ({
+      ...d,
+      riderPayout: this.computeRiderPayout(d.pricing?.totalPrice || 0, rate, min),
+    }));
+
+    return {
+      success: true,
+      message: 'Scheduled deliveries retrieved',
+      data: withPayout,
+    };
+  }
+
+  async acceptScheduledDelivery(rider: Rider, id: string) {
+    const delivery = await this.deliveryModel.findById(id);
+    if (!delivery) throw new NotFoundException('Delivery not found');
+    if (delivery.rider?.toString() !== rider._id.toString()) {
+      throw new ForbiddenException('You are not assigned to this delivery');
+    }
+    if (delivery.status !== DeliveryStatusEnum.PENDING_ACCEPTANCE) {
+      throw new BadRequestException('This delivery is not pending your acceptance');
+    }
+
+    delivery.status = DeliveryStatusEnum.RIDER_ASSIGNED as any;
+    delivery.riderAcceptedAt = new Date();
+    delivery.canReschedule = false;
+    await delivery.save();
+
+    const deliveryId = delivery._id.toString();
+    this.gateway.emitDeliveryStatusUpdate(deliveryId, DeliveryStatusEnum.RIDER_ASSIGNED, {
+      riderId: rider._id,
+      riderName: `${rider.firstName} ${rider.lastName}`,
+    });
+    this.gateway.emitSystemChatMessage(
+      deliveryId,
+      `${rider.firstName} has accepted the scheduled delivery.`,
+    );
+
+    await this.pushNotifyCustomer(
+      delivery.customer,
+      'Rider Confirmed! ✅',
+      `${rider.firstName} has accepted your scheduled delivery ${delivery.trackingNumber}.`,
+      { type: 'rider_accepted', deliveryId, trackingNumber: delivery.trackingNumber },
+    );
+
+    const { rate, min } = await this.getCommissionConfig();
+    const riderPayout = this.computeRiderPayout(delivery.pricing?.totalPrice || 0, rate, min);
+
+    return {
+      success: true,
+      message: 'Scheduled delivery accepted',
+      data: {
+        deliveryId: delivery._id,
+        trackingNumber: delivery.trackingNumber,
+        status: delivery.status,
+        scheduledPickupTime: delivery.scheduledPickupTime,
+        pickupLocation: delivery.pickupLocation,
+        dropoffLocation: delivery.dropoffLocation,
+        riderPayout,
+      },
+    };
+  }
+
+  async rejectScheduledDelivery(rider: Rider, id: string) {
+    const delivery = await this.deliveryModel.findById(id);
+    if (!delivery) throw new NotFoundException('Delivery not found');
+    if (delivery.rider?.toString() !== rider._id.toString()) {
+      throw new ForbiddenException('You are not assigned to this delivery');
+    }
+    if (
+      delivery.status !== DeliveryStatusEnum.PENDING_ACCEPTANCE &&
+      delivery.status !== DeliveryStatusEnum.RIDER_ASSIGNED
+    ) {
+      throw new BadRequestException('This delivery cannot be rejected at this stage');
+    }
+
+    delivery.rider = undefined;
+    delivery.status = DeliveryStatusEnum.SCHEDULED as any;
+    delivery.riderAssignedAt = undefined;
+    delivery.riderAcceptedAt = undefined;
+    delivery.canReschedule = true;
+    await delivery.save();
+
+    const deliveryId = delivery._id.toString();
+    this.gateway.emitDeliveryStatusUpdate(deliveryId, DeliveryStatusEnum.SCHEDULED);
+    this.gateway.emitSystemChatMessage(
+      deliveryId,
+      'Rider has declined the scheduled delivery. Awaiting new assignment.',
+    );
+
+    await this.pushNotifyCustomer(
+      delivery.customer,
+      'Rider Change',
+      `The assigned rider for ${delivery.trackingNumber} was unable to accept. A new rider will be assigned.`,
+      { type: 'rider_rejected_scheduled', deliveryId, trackingNumber: delivery.trackingNumber },
+    );
+
+    return {
+      success: true,
+      message: 'Scheduled delivery rejected',
+      data: { deliveryId: delivery._id },
     };
   }
 

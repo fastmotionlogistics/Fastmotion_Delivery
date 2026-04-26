@@ -480,8 +480,8 @@ export class DeliveryGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   private readonly ACTIVE_STATUSES = [
     'pending', 'searching_rider', 'rider_accepted', 'rider_assigned',
-    'rider_en_route_pickup', 'rider_arrived_pickup', 'picked_up',
-    'in_transit', 'rider_arrived_dropoff', 'scheduled',
+    'pending_acceptance', 'rider_en_route_pickup', 'rider_arrived_pickup',
+    'picked_up', 'in_transit', 'rider_arrived_dropoff', 'scheduled',
     'awaiting_payment', 'payment_confirmed',
   ];
 

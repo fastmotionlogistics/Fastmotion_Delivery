@@ -29,6 +29,7 @@ export enum DeliveryStatusEnum {
 
   // Scheduled-specific
   SCHEDULED = 'scheduled', // Scheduled delivery confirmed, waiting for pickup time
+  PENDING_ACCEPTANCE = 'pending_acceptance', // Admin assigned rider, waiting for rider to accept
 }
 
 // Delivery Type
