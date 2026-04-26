@@ -834,17 +834,23 @@ export class DeliveryService {
       throw new BadRequestException('Invalid delivery status for payment confirmation');
     }
 
-    // Generate pickup PIN
-    const pickupPin = this.deliveryRepository.generatePin();
-    const deliveryPin = this.deliveryRepository.generatePin();
+    // Atomically set PINs only if not already present
+    const candidatePickupPin = this.deliveryRepository.generatePin();
+    const candidateDeliveryPin = this.deliveryRepository.generatePin();
+    const updated = await this.deliveryRepository.deliveryModel.findByIdAndUpdate(
+      id,
+      [{
+        $set: {
+          paymentStatus: DeliveryPaymentStatusEnum.PAID,
+          status: DeliveryStatusEnum.PAYMENT_CONFIRMED,
+          pickupPin: { $ifNull: ['$pickupPin', candidatePickupPin] },
+          deliveryPin: { $ifNull: ['$deliveryPin', candidateDeliveryPin] },
+        },
+      }],
+      { new: true },
+    ).select('+pickupPin +deliveryPin');
 
-    // Update delivery
-    await this.deliveryRepository.updateById(id, {
-      paymentStatus: DeliveryPaymentStatusEnum.PAID,
-      status: DeliveryStatusEnum.PAYMENT_CONFIRMED,
-      pickupPin,
-      deliveryPin,
-    });
+    const pickupPin = updated?.pickupPin || candidatePickupPin;
 
     // WS: broadcast payment confirmed + status
     this.gateway.emitDeliveryStatusUpdate(id, DeliveryStatusEnum.PAYMENT_CONFIRMED, {
@@ -1256,8 +1262,11 @@ export class DeliveryService {
     if (!delivery) throw new NotFoundException('Delivery not found');
     if (delivery.customer.toString() !== user._id.toString()) throw new ForbiddenException('Access denied');
 
-    if (delivery.paymentStatus !== DeliveryPaymentStatusEnum.PAID) {
-      throw new BadRequestException('Only paid deliveries can retry rider matching');
+    if (delivery.paymentStatus !== DeliveryPaymentStatusEnum.PAID && !delivery.paymentRequiredAtPickup) {
+      throw new BadRequestException('Only paid or pay-at-pickup deliveries can retry rider matching');
+    }
+    if (delivery.rider) {
+      throw new BadRequestException('A rider has already been assigned to this delivery');
     }
     if (delivery.status !== DeliveryStatusEnum.SEARCHING_RIDER) {
       throw new BadRequestException('Delivery is not in searching state');

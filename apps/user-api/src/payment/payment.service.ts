@@ -157,23 +157,29 @@ export class PaymentService {
       { deliveryId: delivery._id.toString(), paymentId: payment._id.toString() },
     );
 
-    // Generate PINs and update delivery
-    const pickupPin = Math.floor(1000 + Math.random() * 9000).toString();
-    const deliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
-
     // Determine the correct next status
     const isQuickDelivery = delivery.deliveryType === 'quick';
     const newStatus = isQuickDelivery ? DeliveryStatusEnum.PAYMENT_CONFIRMED : DeliveryStatusEnum.SCHEDULED;
 
-    await this.paymentRepository.deliveryModel.findByIdAndUpdate(delivery._id, {
-      $set: {
-        paymentStatus: DeliveryPaymentStatusEnum.PAID,
-        payment: payment._id,
-        pickupPin,
-        deliveryPin,
-        status: newStatus,
-      },
-    });
+    // Atomically set PINs only if not already present (prevents race with webhook)
+    const candidatePickupPin = Math.floor(1000 + Math.random() * 9000).toString();
+    const candidateDeliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
+    const updated = await this.paymentRepository.deliveryModel.findByIdAndUpdate(
+      delivery._id,
+      [{
+        $set: {
+          paymentStatus: DeliveryPaymentStatusEnum.PAID,
+          payment: payment._id,
+          status: newStatus,
+          pickupPin: { $ifNull: ['$pickupPin', candidatePickupPin] },
+          deliveryPin: { $ifNull: ['$deliveryPin', candidateDeliveryPin] },
+        },
+      }],
+      { new: true },
+    ).select('+pickupPin +deliveryPin');
+
+    const pickupPin = updated?.pickupPin || candidatePickupPin;
+    const deliveryPin = updated?.deliveryPin || candidateDeliveryPin;
 
     // WS: broadcast payment confirmed
     this.gateway.emitDeliveryStatusUpdate(delivery._id.toString(), newStatus, { paymentStatus: 'paid' });
@@ -855,22 +861,25 @@ export class PaymentService {
         }
       }
 
-      const pickupPin = Math.floor(1000 + Math.random() * 9000).toString();
-      const deliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
-
       // Determine next status based on delivery type
       const newStatus =
         delivery.deliveryType === 'scheduled' ? DeliveryStatusEnum.SCHEDULED : DeliveryStatusEnum.PAYMENT_CONFIRMED;
 
-      await this.paymentRepository.deliveryModel.findByIdAndUpdate(deliveryId, {
-        $set: {
-          paymentStatus: DeliveryPaymentStatusEnum.PAID,
-          payment: payment._id,
-          pickupPin,
-          deliveryPin,
-          status: newStatus,
-        },
-      });
+      // Atomically set PINs only if not already present (prevents race with poll)
+      const candidatePickupPin = Math.floor(1000 + Math.random() * 9000).toString();
+      const candidateDeliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
+      await this.paymentRepository.deliveryModel.findByIdAndUpdate(
+        deliveryId,
+        [{
+          $set: {
+            paymentStatus: DeliveryPaymentStatusEnum.PAID,
+            payment: payment._id,
+            status: newStatus,
+            pickupPin: { $ifNull: ['$pickupPin', candidatePickupPin] },
+            deliveryPin: { $ifNull: ['$deliveryPin', candidateDeliveryPin] },
+          },
+        }],
+      );
 
       // WS: broadcast payment confirmed to the user's app
       this.gateway.emitDeliveryStatusUpdate(deliveryId.toString(), newStatus, { paymentStatus: 'paid' });

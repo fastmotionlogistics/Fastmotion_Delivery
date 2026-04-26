@@ -73,6 +73,10 @@ export class RiderMatchingService implements OnModuleInit {
         this.logger.warn(`Delivery ${deliveryIdStr} not found, skipping rider matching`);
         return;
       }
+      if (delivery.rider) {
+        this.logger.log(`Delivery ${deliveryIdStr} already has a rider, skipping`);
+        return;
+      }
 
       // Find nearby online, verified, available riders
       const nearbyRiders = await this.findNearbyRiders(
@@ -83,11 +87,14 @@ export class RiderMatchingService implements OnModuleInit {
 
       this.logger.log(`Found ${nearbyRiders.length} nearby riders for delivery ${deliveryIdStr}`);
 
-      const isPaid = delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID || delivery.paymentStatus === 'paid';
+      const isPaidOrPayAtPickup =
+        delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID ||
+        delivery.paymentStatus === 'paid' ||
+        delivery.paymentRequiredAtPickup === true;
 
       if (nearbyRiders.length === 0) {
         this.logger.warn(`No riders available for delivery ${deliveryIdStr}`);
-        if (isPaid) {
+        if (isPaidOrPayAtPickup) {
           this.gateway.emitMatchingUpdate(deliveryIdStr, { type: 'exhausted_retrying' });
         } else {
           await this.handleUnpaidExhausted(deliveryIdStr, delivery);
@@ -106,7 +113,7 @@ export class RiderMatchingService implements OnModuleInit {
 
       if (riderList.length === 0) {
         this.logger.warn(`No riders available (after cooldown filter) for delivery ${deliveryIdStr}`);
-        if (isPaid) {
+        if (isPaidOrPayAtPickup) {
           this.gateway.emitMatchingUpdate(deliveryIdStr, { type: 'exhausted_retrying' });
         } else {
           await this.handleUnpaidExhausted(deliveryIdStr, delivery);
