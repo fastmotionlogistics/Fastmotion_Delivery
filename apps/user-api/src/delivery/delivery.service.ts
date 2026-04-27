@@ -609,6 +609,64 @@ export class DeliveryService {
     };
   }
 
+  async getCancelPreview(user: User, id: string) {
+    const delivery = await this.deliveryRepository.findById(id);
+    if (!delivery) throw new NotFoundException('Delivery not found');
+    if (delivery.customer.toString() !== user._id.toString()) {
+      throw new ForbiddenException('You do not have access to this delivery');
+    }
+
+    const nonCancellableStatuses = [
+      DeliveryStatusEnum.DELIVERED,
+      DeliveryStatusEnum.COMPLETED,
+      DeliveryStatusEnum.CANCELLED,
+    ];
+    if (nonCancellableStatuses.includes(delivery.status as DeliveryStatusEnum)) {
+      throw new BadRequestException('This delivery cannot be cancelled');
+    }
+
+    const pricingConfig = await this.deliveryRepository.getActivePricingConfig();
+    let cancellationFee = 0;
+    let refundAmount = 0;
+    const totalPaid = delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID ? delivery.pricing.totalPrice : 0;
+
+    if (totalPaid > 0) {
+      if (
+        [
+          DeliveryStatusEnum.PENDING,
+          DeliveryStatusEnum.SEARCHING_RIDER,
+          DeliveryStatusEnum.SCHEDULED,
+          DeliveryStatusEnum.PENDING_ACCEPTANCE,
+        ].includes(delivery.status as DeliveryStatusEnum)
+      ) {
+        cancellationFee = pricingConfig?.cancellationFeeBeforeAccept || 0;
+      } else if (
+        [
+          DeliveryStatusEnum.RIDER_ACCEPTED,
+          DeliveryStatusEnum.RIDER_ASSIGNED,
+          DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP,
+        ].includes(delivery.status as DeliveryStatusEnum)
+      ) {
+        cancellationFee = pricingConfig?.cancellationFeeAfterAccept || 0;
+      } else {
+        const percentage = pricingConfig?.cancellationFeeAfterPickupPercentage || 0;
+        cancellationFee = Math.round(totalPaid * percentage);
+      }
+      refundAmount = Math.max(0, totalPaid - cancellationFee);
+    }
+
+    return {
+      success: true,
+      data: {
+        totalPaid,
+        cancellationFee,
+        refundAmount,
+        status: delivery.status,
+        paymentStatus: delivery.paymentStatus,
+      },
+    };
+  }
+
   async cancelDelivery(user: User, id: string, body: CancelDeliveryDto) {
     let delivery = await this.deliveryRepository.findById(id);
 
@@ -649,8 +707,14 @@ export class DeliveryService {
     if (delivery.paymentStatus === DeliveryPaymentStatusEnum.PAID) {
       const totalPaid = delivery.pricing.totalPrice;
 
-      if (delivery.status === DeliveryStatusEnum.PENDING || delivery.status === DeliveryStatusEnum.SEARCHING_RIDER) {
-        // Before rider accepts - minimal or no fee
+      if (
+        [
+          DeliveryStatusEnum.PENDING,
+          DeliveryStatusEnum.SEARCHING_RIDER,
+          DeliveryStatusEnum.SCHEDULED,
+          DeliveryStatusEnum.PENDING_ACCEPTANCE,
+        ].includes(delivery.status as DeliveryStatusEnum)
+      ) {
         cancellationFee = pricingConfig?.cancellationFeeBeforeAccept || 0;
       } else if (
         [
@@ -659,15 +723,13 @@ export class DeliveryService {
           DeliveryStatusEnum.RIDER_EN_ROUTE_PICKUP,
         ].includes(delivery.status as DeliveryStatusEnum)
       ) {
-        // After rider accepts but before pickup
         cancellationFee = pricingConfig?.cancellationFeeAfterAccept || 0;
       } else {
-        // After pickup - percentage-based fee
         const percentage = pricingConfig?.cancellationFeeAfterPickupPercentage || 0;
         cancellationFee = Math.round(totalPaid * percentage);
       }
 
-      refundAmount = totalPaid - cancellationFee;
+      refundAmount = Math.max(0, totalPaid - cancellationFee);
     }
 
     // Update delivery status

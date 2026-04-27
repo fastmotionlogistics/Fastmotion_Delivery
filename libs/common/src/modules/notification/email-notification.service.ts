@@ -15,7 +15,7 @@ export class EmailNotificationService {
   private readonly logger = new Logger(EmailNotificationService.name);
   private readonly brevoApiKey: string;
   private readonly brevoApiUrl = 'https://api.brevo.com/v3/smtp/email';
-  private readonly senderEmail = 'godson0477@gmail.com';
+  private readonly senderEmail = 'fastmotionlogisticsng@gmail.com';
   private readonly senderName = 'FastMotion';
 
   constructor(

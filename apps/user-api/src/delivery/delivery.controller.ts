@@ -133,6 +133,15 @@ export class DeliveryController {
     return await this.deliveryService.rescheduleDelivery(user, id, body);
   }
 
+  @ApiOperation({ summary: 'Preview cancellation fee and refund before cancelling' })
+  @Get(':id/cancel-preview')
+  async cancelPreview(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+  ) {
+    return await this.deliveryService.getCancelPreview(user, id);
+  }
+
   @ApiOperation({ summary: 'Cancel a delivery request' })
   @ApiBody({ type: CancelDeliveryDto })
   @Delete(':id')
