@@ -37,6 +37,14 @@ export class AppContent extends AbstractDocument {
 
   @ApiProperty()
   @Prop({ type: String, default: '' })
+  riderTermsAndConditions: string;
+
+  @ApiProperty()
+  @Prop({ type: String, default: '' })
+  riderPrivacyPolicy: string;
+
+  @ApiProperty()
+  @Prop({ type: String, default: '' })
   contactEmail: string;
 
   @ApiProperty()

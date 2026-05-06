@@ -18,6 +18,8 @@ export class AdminAppContentService {
         _id: new Types.ObjectId(),
         termsAndConditions: '',
         privacyPolicy: '',
+        riderTermsAndConditions: '',
+        riderPrivacyPolicy: '',
         contactEmail: '',
         contactPhone: '',
         faqs: [],
@@ -35,6 +37,8 @@ export class AdminAppContentService {
     const update: Record<string, any> = {};
     if (dto.termsAndConditions !== undefined) update.termsAndConditions = dto.termsAndConditions;
     if (dto.privacyPolicy !== undefined) update.privacyPolicy = dto.privacyPolicy;
+    if (dto.riderTermsAndConditions !== undefined) update.riderTermsAndConditions = dto.riderTermsAndConditions;
+    if (dto.riderPrivacyPolicy !== undefined) update.riderPrivacyPolicy = dto.riderPrivacyPolicy;
     if (dto.contactEmail !== undefined) update.contactEmail = dto.contactEmail;
     if (dto.contactPhone !== undefined) update.contactPhone = dto.contactPhone;
     if (dto.faqs !== undefined) update.faqs = dto.faqs;

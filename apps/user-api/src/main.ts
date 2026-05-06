@@ -11,9 +11,7 @@ import * as compression from 'compression';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const power = app.get(ShutdownService);
-
   app.enableCors();
-
   const config = new DocumentBuilder()
     .setTitle('FastMotion User API - Customer App')
     .setDescription('FastMotion Delivery Service API for customers')

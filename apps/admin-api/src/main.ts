@@ -15,6 +15,7 @@ async function bootstrap() {
       'https://backoffice.fastmotionlogisticsltd.com',
       'https://fastmotionbackoffice.netlify.app',
       'http://localhost:5173',
+      'http://localhost:5174',
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

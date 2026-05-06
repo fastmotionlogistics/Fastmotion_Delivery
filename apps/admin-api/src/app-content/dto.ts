@@ -18,15 +18,25 @@ export class FaqItemDto {
 }
 
 export class UpdateAppContentDto {
-  @ApiPropertyOptional({ description: 'HTML string for Terms & Conditions' })
+  @ApiPropertyOptional({ description: 'HTML string for Terms & Conditions (Customer App)' })
   @IsString()
   @IsOptional()
   termsAndConditions?: string;
 
-  @ApiPropertyOptional({ description: 'HTML string for Privacy Policy' })
+  @ApiPropertyOptional({ description: 'HTML string for Privacy Policy (Customer App)' })
   @IsString()
   @IsOptional()
   privacyPolicy?: string;
+
+  @ApiPropertyOptional({ description: 'HTML string for Terms & Conditions (Rider App)' })
+  @IsString()
+  @IsOptional()
+  riderTermsAndConditions?: string;
+
+  @ApiPropertyOptional({ description: 'HTML string for Privacy Policy (Rider App)' })
+  @IsString()
+  @IsOptional()
+  riderPrivacyPolicy?: string;
 
   @ApiPropertyOptional({ example: 'support@fastmotion.ng' })
   @IsString()

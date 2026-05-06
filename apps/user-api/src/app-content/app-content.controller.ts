@@ -21,6 +21,8 @@ export class AppContentController {
       data: {
         termsAndConditions: content?.termsAndConditions || '',
         privacyPolicy: content?.privacyPolicy || '',
+        riderTermsAndConditions: content?.riderTermsAndConditions || '',
+        riderPrivacyPolicy: content?.riderPrivacyPolicy || '',
         contactEmail: content?.contactEmail || '',
         contactPhone: content?.contactPhone || '',
         faqs: content?.faqs || [],
