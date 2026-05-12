@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiBody, ApiTags, ApiOperation } from '@nestjs/swagger';
 import {
   ForgotPasswordDto,
   GoogleSignDto,
+  AppleSignDto,
   LoginDto,
   RegisterUserDto,
   ResetPasswordDto,
@@ -55,6 +56,22 @@ export class AuthController {
   @Post('googleSignUp')
   async googleSignUp(@Body() body: GoogleSignDto) {
     return await this.authService.googleSignUp(body.accessToken);
+  }
+
+  @ApiOperation({ summary: 'Sign in with Apple' })
+  @ApiBody({ type: AppleSignDto })
+  @UseInterceptors(ClassSerializerInterceptor)
+  @Post('appleSignIn')
+  async appleSignIn(@Body() body: AppleSignDto) {
+    return await this.authService.appleSignIn(body.identityToken, body.firstName, body.lastName);
+  }
+
+  @ApiOperation({ summary: 'Sign up with Apple' })
+  @ApiBody({ type: AppleSignDto })
+  @UseInterceptors(ClassSerializerInterceptor)
+  @Post('appleSignUp')
+  async appleSignUp(@Body() body: AppleSignDto) {
+    return await this.authService.appleSignUp(body.identityToken, body.firstName, body.lastName);
   }
 
   @UseInterceptors(ClassSerializerInterceptor)

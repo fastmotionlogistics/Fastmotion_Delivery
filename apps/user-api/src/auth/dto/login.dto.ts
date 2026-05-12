@@ -64,3 +64,19 @@ export class GoogleSignDto {
   @IsString()
   accessToken: string;
 }
+
+export class AppleSignDto {
+  @ApiProperty({ description: 'Apple identityToken (JWT) from the device' })
+  @IsString()
+  identityToken: string;
+
+  @ApiPropertyOptional({ description: 'First name (only provided on first sign-in)' })
+  @IsString()
+  @IsOptional()
+  firstName?: string;
+
+  @ApiPropertyOptional({ description: 'Last name (only provided on first sign-in)' })
+  @IsString()
+  @IsOptional()
+  lastName?: string;
+}

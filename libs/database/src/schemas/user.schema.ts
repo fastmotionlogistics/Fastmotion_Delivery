@@ -288,6 +288,14 @@ export class User extends AbstractDocument {
   @Prop({
     type: String,
     required: false,
+    index: true,
+  })
+  appleUserId?: string;
+
+  @ApiProperty()
+  @Prop({
+    type: String,
+    required: false,
     select: false,
   })
   deviceToken?: string;

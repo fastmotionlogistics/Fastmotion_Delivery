@@ -49,9 +49,9 @@ export class AdminNotificationService {
     let recipientType: NotificationRecipientType;
 
     if (targetType === NotifTargetType.USER) {
-      const user = await this.userModel.findById(recipientId).select('firstName lastName email deviceToken').lean();
+      const user = await this.userModel.findById(recipientId).select('firstName lastName email fcmToken').lean();
       if (!user) throw new NotFoundException('User not found');
-      token = (user as any).deviceToken;
+      token = (user as any).fcmToken;
       email = user.email;
       recipientType = NotificationRecipientType.USER;
     } else {
@@ -95,7 +95,7 @@ export class AdminNotificationService {
     if (sendToUsers) {
       const users = await this.userModel
         .find({ email: { $exists: true } })
-        .select('email deviceToken')
+        .select('email fcmToken')
         .lean();
 
       for (const user of users) {
@@ -105,7 +105,7 @@ export class AdminNotificationService {
             recipientType: NotificationRecipientType.USER,
             title,
             body,
-            token: (user as any).deviceToken,
+            token: (user as any).fcmToken,
             channels,
             email: user.email,
             data: { type: 'broadcast' },

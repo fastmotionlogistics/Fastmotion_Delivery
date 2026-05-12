@@ -10,6 +10,8 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 
 import { OAuth2Client } from 'google-auth-library';
+import * as jwt from 'jsonwebtoken';
+import * as jwksClient from 'jwks-rsa';
 import { Types } from 'mongoose';
 import {
   LoginDto,
@@ -391,6 +393,149 @@ export class AuthService {
           lastName: user.lastName,
           email: user.email,
           isEmailConfirmed: true,
+        },
+        needsOnboarding: true,
+      },
+    };
+  }
+
+  private async verifyAppleIdentityToken(identityToken: string): Promise<{ sub: string; email: string; email_verified?: boolean }> {
+    try {
+      const client = jwksClient({
+        jwksUri: 'https://appleid.apple.com/auth/keys',
+        cache: true,
+        cacheMaxAge: 86400000,
+      });
+
+      const decoded = jwt.decode(identityToken, { complete: true });
+      if (!decoded || !decoded.header?.kid) {
+        throw new BadRequestException('Invalid Apple identity token');
+      }
+
+      const key = await client.getSigningKey(decoded.header.kid);
+      const signingKey = key.getPublicKey();
+
+      const payload = jwt.verify(identityToken, signingKey, {
+        algorithms: ['RS256'],
+        issuer: 'https://appleid.apple.com',
+      }) as any;
+
+      if (!payload.sub) {
+        throw new BadRequestException('Apple token missing subject');
+      }
+
+      return {
+        sub: payload.sub,
+        email: payload.email,
+        email_verified: payload.email_verified === 'true' || payload.email_verified === true,
+      };
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new UnauthorizedException('Invalid Apple token. Please try again.');
+    }
+  }
+
+  async appleSignIn(identityToken: string, firstName?: string, lastName?: string) {
+    const applePayload = await this.verifyAppleIdentityToken(identityToken);
+
+    let user: User | null = null;
+
+    if (applePayload.email) {
+      user = await this.userRepository.findOne({ email: applePayload.email });
+    }
+    if (!user) {
+      user = await this.userRepository.findOne({ appleUserId: applePayload.sub });
+    }
+
+    if (user) {
+      if (!user.appleUserId) {
+        await this.userRepository.findOneAndUpdate(
+          { _id: user._id },
+          { appleUserId: applePayload.sub, isSocialLogin: true },
+        );
+      }
+
+      const refresh_token = await this.generateRefreshToken(user, '');
+      const access_token = await this.generateAccessTokens(user, refresh_token);
+      const fullUser = await this.userRepository.findById(user._id);
+
+      return {
+        success: true,
+        message: 'Login successful',
+        data: {
+          accessToken: access_token,
+          refreshToken: refresh_token,
+          user: {
+            id: fullUser?._id || user._id,
+            firstName: fullUser?.firstName || user.firstName,
+            lastName: fullUser?.lastName || user.lastName,
+            email: fullUser?.email || user.email,
+            phone: fullUser?.phone || user.phone,
+            isPhotoUpload: fullUser?.isPhotoUpload,
+            isProfileUpdated: fullUser?.isProfileUpdated || user.isProfileUpdated,
+            isOnboardingComplete: fullUser?.isOnboardingComplete || user.isOnboardingComplete,
+            isEmailConfirmed: true,
+            isPhoneConfirmed: fullUser?.isPhoneConfirmed,
+          },
+        },
+      };
+    }
+
+    return await this.appleSignUp(identityToken, firstName, lastName);
+  }
+
+  async appleSignUp(identityToken: string, firstName?: string, lastName?: string, ipAddress?: string) {
+    const applePayload = await this.verifyAppleIdentityToken(identityToken);
+
+    if (applePayload.email) {
+      const existingUser = await this.userRepository.findOne({ email: applePayload.email });
+      if (existingUser) {
+        return await this.appleSignIn(identityToken, firstName, lastName);
+      }
+    }
+
+    const existingApple = await this.userRepository.findOne({ appleUserId: applePayload.sub });
+    if (existingApple) {
+      return await this.appleSignIn(identityToken, firstName, lastName);
+    }
+
+    const passSalt = await bcrypt.genSalt();
+    const randomPassword = await bcrypt.hash(generateRandomString(8), passSalt);
+
+    const user = await this.userRepository.create({
+      email: applePayload.email || undefined,
+      firstName: firstName || undefined,
+      lastName: lastName || undefined,
+      passwordHash: randomPassword,
+      passwordSalt: passSalt,
+      isEmailConfirmed: !!applePayload.email,
+      isSocialLogin: true,
+      appleUserId: applePayload.sub,
+      type: Role.NORMAL_USER,
+      emailConfirmationDate: applePayload.email ? timeZoneMoment().toDate() : undefined,
+    });
+
+    const refresh_token = await this.generateRefreshToken(user, ipAddress);
+    const access_token = await this.generateAccessTokens(user);
+
+    this.eventEmitter.emit(AUTH_EVENTS.USER_WELCOME, {
+      userId: user._id.toString(),
+      email: user.email,
+      fullName: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim(),
+    });
+
+    return {
+      success: true,
+      message: 'Account created successfully',
+      data: {
+        accessToken: access_token,
+        refreshToken: refresh_token,
+        user: {
+          id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          isEmailConfirmed: !!applePayload.email,
         },
         needsOnboarding: true,
       },
