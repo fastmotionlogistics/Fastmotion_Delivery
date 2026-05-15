@@ -1057,7 +1057,7 @@ export class DeliveryService {
         },
         estimatedArrival,
         averageRating: rider.averageRating,
-        // NOTE: phone/contact NOT included per policy
+        phone: rider.phone,
       },
     };
   }

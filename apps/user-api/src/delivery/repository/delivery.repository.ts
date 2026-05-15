@@ -307,7 +307,7 @@ export class DeliveryRepository {
   async findRiderPublicInfo(riderId: Types.ObjectId): Promise<Partial<Rider> | null> {
     return this.riderModel
       .findById(riderId)
-      .select('firstName lastName profilePhoto vehicleType vehiclePlateNumber averageRating currentLatitude currentLongitude')
+      .select('firstName lastName profilePhoto vehicleType vehiclePlateNumber averageRating currentLatitude currentLongitude phone')
       .lean();
   }
 
